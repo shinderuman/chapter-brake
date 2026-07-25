@@ -1,0 +1,24 @@
+# Build outputs
+/chapter-brake
+/bin/
+/dist/
+
+# Test and coverage
+*.test
+coverage.out
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Local investigation artifacts
+/tmp/
+
+# PoC generated media and logs
+/poc/artifacts/
+/poc/logs/
+/poc/*.mkv
+/poc/*.mp4
