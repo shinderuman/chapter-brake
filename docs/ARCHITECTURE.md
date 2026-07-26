@@ -22,6 +22,7 @@ PoCで必要なコードは`poc/`へ隔離し、次を守る。
 
 ```text
 cmd/chapterbrake
+internal/bootstrap
 internal/app
 internal/config
 internal/queue
@@ -36,8 +37,14 @@ internal/tui
 ### `cmd/chapterbrake`
 
 - `main`のみ。
-- シグナル、依存組み立て、終了コード。
+- `internal/bootstrap.Run`の呼び出しと終了コードだけを扱う。
 - 製品ロジックを置かない。
+
+### `internal/bootstrap`
+
+- OSシグナルをアプリの停止経路へ接続する。
+- 設定、キュー、ログ、外部ツール、ランナー、TUIの依存関係を組み立てる。
+- ドメイン判断を持たず、各パッケージの実装を起動可能な形へ配線する。
 
 ### `internal/app`
 
