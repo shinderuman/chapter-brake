@@ -37,6 +37,7 @@ type Service struct {
 	Scanner         Scanner
 	Presets         PresetCatalog
 	OutputDirectory string
+	ChapterInterval time.Duration
 	Now             func() time.Time
 
 	sequence atomic.Uint64
@@ -48,6 +49,7 @@ type Draft struct {
 	Preset           handbrake.Preset
 	Base             string
 	StartIndex       int
+	ChapterInterval  time.Duration
 	SelectedChapters []int
 	AudioTracks      []int
 	Subtitles        []int
@@ -81,7 +83,10 @@ func (s *Service) Analyze(ctx context.Context, input string) (Draft, error) {
 	if err != nil {
 		return Draft{}, err
 	}
-	selected, err := media.ApproximateStarts(mediaInfo.Chapters, media.DefaultEpisodeInterval)
+	if s.ChapterInterval <= 0 {
+		return Draft{}, fmt.Errorf("chapter interval must be positive")
+	}
+	selected, err := media.ApproximateStarts(mediaInfo.Chapters, s.ChapterInterval)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -103,6 +108,7 @@ func (s *Service) Analyze(ctx context.Context, input string) (Draft, error) {
 		Input:            input,
 		Media:            mediaInfo,
 		Base:             base,
+		ChapterInterval:  s.ChapterInterval,
 		SelectedChapters: selected,
 		AudioTracks:      audio,
 		Subtitles:        []int{},

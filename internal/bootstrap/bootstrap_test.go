@@ -13,6 +13,7 @@ import (
 
 	"chapterbrake/internal/app"
 	"chapterbrake/internal/config"
+	"chapterbrake/internal/media"
 	"chapterbrake/internal/process"
 	"chapterbrake/internal/runner"
 )
@@ -72,6 +73,9 @@ func TestRunBuildsApplication(t *testing.T) {
 	}
 	if gotService.OutputDirectory != outputDirectory {
 		t.Fatalf("output directory = %q", gotService.OutputDirectory)
+	}
+	if gotService.ChapterInterval != media.DefaultEpisodeInterval {
+		t.Fatalf("chapter interval = %s", gotService.ChapterInterval)
 	}
 	if gotInitialDirectory != inputDirectory {
 		t.Fatalf("initial directory = %q", gotInitialDirectory)
@@ -267,6 +271,7 @@ func testDependencies(t *testing.T) (dependencies, string, string, string) {
 		Version:         config.Version,
 		InputDirectory:  inputDirectory,
 		OutputDirectory: outputDirectory,
+		ChapterInterval: config.DefaultChapterInterval,
 	}); err != nil {
 		t.Fatal(err)
 	}

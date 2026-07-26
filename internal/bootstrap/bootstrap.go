@@ -108,6 +108,10 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 	if err != nil {
 		return err
 	}
+	chapterInterval, err := media.ParseChapterInterval(settings.ChapterInterval)
+	if err != nil {
+		return fmt.Errorf("parse configured chapter interval: %w", err)
+	}
 	initialDirectory := settings.InputDirectory
 	initialDirectorySource := "settings"
 	if opts.inputDirectory != "" {
@@ -139,6 +143,7 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 		"data_directory", dataDirectory,
 		"input_directory", settings.InputDirectory,
 		"output_directory", settings.OutputDirectory,
+		"chapter_interval", settings.ChapterInterval,
 		"app_log", appLogPath,
 	)
 
@@ -174,6 +179,7 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 		Scanner:         scanner,
 		Presets:         catalog,
 		OutputDirectory: settings.OutputDirectory,
+		ChapterInterval: chapterInterval,
 	}
 	appLogger.Info("input browser initialized",
 		"directory", initialDirectory,

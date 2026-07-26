@@ -148,6 +148,52 @@ func TestApproximateStarts(t *testing.T) {
 	}
 }
 
+func TestParseAndFormatChapterInterval(t *testing.T) {
+	tests := []struct {
+		value   string
+		want    time.Duration
+		errText string
+	}{
+		{value: "23:40", want: 23*time.Minute + 40*time.Second},
+		{value: "0:01", want: time.Second},
+		{value: "90:00", want: 90 * time.Minute},
+		{value: "", errText: "M:SS"},
+		{value: "23", errText: "M:SS"},
+		{value: "23:4", errText: "M:SS"},
+		{value: " 23:40", errText: "M:SS"},
+		{value: "-1:00", errText: "minutes"},
+		{value: "1:60", errText: "seconds"},
+		{value: "0:00", errText: "positive"},
+		{value: "999999999999999999:00", errText: "too large"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			got, err := ParseChapterInterval(tt.value)
+			if tt.errText != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.errText) {
+					t.Fatalf("ParseChapterInterval() error = %v, want containing %q", err, tt.errText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseChapterInterval() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("ParseChapterInterval() = %s, want %s", got, tt.want)
+			}
+			if formatted := FormatChapterInterval(got); formatted != tt.value {
+				t.Fatalf("FormatChapterInterval() = %q, want %q", formatted, tt.value)
+			}
+		})
+	}
+
+	for _, invalid := range []time.Duration{0, -time.Second, time.Millisecond} {
+		if got := FormatChapterInterval(invalid); got != "" {
+			t.Fatalf("FormatChapterInterval(%s) = %q, want empty", invalid, got)
+		}
+	}
+}
+
 func TestValidateChapters(t *testing.T) {
 	tests := []struct {
 		name    string

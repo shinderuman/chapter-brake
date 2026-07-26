@@ -70,6 +70,7 @@ func testService(t *testing.T) (*Service, Draft, *serviceStore) {
 		Scanner:         serviceScanner{info: info},
 		Presets:         serviceCatalog{},
 		OutputDirectory: root,
+		ChapterInterval: media.DefaultEpisodeInterval,
 		Now: func() time.Time {
 			return time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
 		},
@@ -86,6 +87,9 @@ func TestAnalyzeInitialSelections(t *testing.T) {
 	if draft.Base != "番組" {
 		t.Fatalf("base = %q", draft.Base)
 	}
+	if draft.ChapterInterval != media.DefaultEpisodeInterval {
+		t.Fatalf("chapter interval = %s", draft.ChapterInterval)
+	}
 	if !reflect.DeepEqual(draft.SelectedChapters, []int{1, 2, 3}) {
 		t.Fatalf("selected chapters = %v", draft.SelectedChapters)
 	}
@@ -94,6 +98,27 @@ func TestAnalyzeInitialSelections(t *testing.T) {
 	}
 	if draft.Subtitles == nil || len(draft.Subtitles) != 0 {
 		t.Fatalf("subtitles = %#v", draft.Subtitles)
+	}
+}
+
+func TestAnalyzeUsesConfiguredChapterInterval(t *testing.T) {
+	service, draft, _ := testService(t)
+	service.ChapterInterval = 45 * time.Minute
+	got, err := service.Analyze(context.Background(), draft.Input)
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if got.ChapterInterval != 45*time.Minute {
+		t.Fatalf("chapter interval = %s", got.ChapterInterval)
+	}
+	if !reflect.DeepEqual(got.SelectedChapters, []int{1, 3}) {
+		t.Fatalf("selected chapters = %v, want [1 3]", got.SelectedChapters)
+	}
+
+	service.ChapterInterval = 0
+	if _, err := service.Analyze(context.Background(), draft.Input); err == nil ||
+		!strings.Contains(err.Error(), "chapter interval") {
+		t.Fatalf("Analyze() invalid interval error = %v", err)
 	}
 }
 

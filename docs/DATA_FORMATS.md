@@ -17,24 +17,31 @@
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "input_directory": "/Volumes/2TB HDD/Images",
-  "output_directory": "/Volumes/2TB HDD/mp4/"
+  "output_directory": "/Volumes/2TB HDD/mp4/",
+  "chapter_interval": "23:40"
 }
 ```
 
 要件:
 
-- `version`は必須で2。
+- `version`は必須で3。
 - `input_directory`と`output_directory`は絶対パス。
+- `chapter_interval`は正の`分:秒`形式とする。分は59を超えてよく、秒は
+  `00`から`59`の2桁とする。
 - 読み込み時に両方の存在とディレクトリ種別を検証し、出力先は書き込み可能性も
   検証する。
 - ファイルがなければ既定値で作成する。
 - version 1の既知形式は`output_directory`を維持し、既定の
-  `input_directory`を追加してversion 2へ原子的に移行する。
+  `input_directory`と`chapter_interval`を追加してversion 3へ原子的に移行する。
+- version 2の既知形式は入出力先を維持し、既定の`chapter_interval`を追加して
+  version 3へ原子的に移行する。
 - JSON不正または未知のversionの場合はエラーで停止し、勝手に上書きしない。
 - `--directory PATH`または`-d PATH`は、一回の起動だけファイル選択の初期位置を
   指定ディレクトリへ差し替え、設定ファイルを書き換えない。相対パスも許可する。
+- チャプター分割画面で変更した区切り時間もそのジョブ追加フローだけに適用し、
+  `settings.json`へ書き戻さない。キューには確定したチャプター範囲だけを保存する。
 - 初期版では設定編集UIを作らない。
 
 ## queue.json

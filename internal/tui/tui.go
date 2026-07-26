@@ -280,8 +280,14 @@ func (u *UI) showNaming() {
 }
 
 func (u *UI) showChapters() {
+	intervalLabel := media.FormatChapterInterval(u.draft.ChapterInterval)
 	selected := intSet(u.draft.SelectedChapters)
 	form := tview.NewForm()
+	interval := tview.NewInputField().
+		SetLabel("区切り時間 (分:秒 / Enterで再計算): ").
+		SetText(intervalLabel).
+		SetFieldWidth(8)
+	form.AddFormItem(interval)
 	boxes := make([]*tview.Checkbox, len(u.draft.Media.Chapters))
 	refresh := func() {}
 	for i, chapter := range u.draft.Media.Chapters {
@@ -303,7 +309,7 @@ func (u *UI) showChapters() {
 	refresh = func() {
 		mode := "手動"
 		if u.draft.AutoChapters {
-			mode = "23分40秒近似: 有効"
+			mode = intervalLabel + "近似: 有効"
 		}
 		form.SetTitle(" チャプター開始位置 — " + mode + " — ↑↓:移動 ←→/Space:切替 Enter:次 Esc:トップ ")
 		elapsed, available := elapsedForDisplay(u.draft.Media.Chapters, sortedKeys(selected))
@@ -322,7 +328,28 @@ func (u *UI) showChapters() {
 		}
 	}
 	refresh()
+	updateApproximation := func(force bool) error {
+		chapterInterval, err := media.ParseChapterInterval(interval.GetText())
+		if err != nil {
+			return fmt.Errorf("区切り時間は分:秒で入力してください: %w", err)
+		}
+		if !force && chapterInterval == u.draft.ChapterInterval {
+			return nil
+		}
+		starts, err := media.ApproximateStarts(u.draft.Media.Chapters, chapterInterval)
+		if err != nil {
+			return err
+		}
+		u.draft.ChapterInterval = chapterInterval
+		u.draft.SelectedChapters = starts
+		u.draft.AutoChapters = true
+		return nil
+	}
 	next := func() {
+		if err := updateApproximation(false); err != nil {
+			u.showError("チャプター", err, u.showChapters)
+			return
+		}
 		if len(u.draft.SelectedChapters) == 0 {
 			u.showError("チャプター", fmt.Errorf("少なくとも1件を選択してください"), u.showChapters)
 			return
@@ -330,14 +357,11 @@ func (u *UI) showChapters() {
 		u.showAudio()
 	}
 	form.
-		AddButton("23分40秒近似値にチェック", func() {
-			starts, err := media.ApproximateStarts(u.draft.Media.Chapters, media.DefaultEpisodeInterval)
-			if err != nil {
+		AddButton("入力した時間の近似値にチェック", func() {
+			if err := updateApproximation(true); err != nil {
 				u.showError("チャプター", err, u.showChapters)
 				return
 			}
-			u.draft.SelectedChapters = starts
-			u.draft.AutoChapters = true
 			u.showChapters()
 		}).
 		AddButton("すべてのチェックを外す", func() {
@@ -348,7 +372,19 @@ func (u *UI) showChapters() {
 		AddButton("次へ", next).
 		AddButton("戻る", u.showNaming)
 	form.SetBorder(true)
-	form.SetInputCapture(formNavigation(form, u.showNaming, u.showMain, next))
+	navigate := formNavigation(form, u.showNaming, u.showMain, next)
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		formItem, _ := form.GetFocusedItemIndex()
+		if formItem == 0 && event.Key() == tcell.KeyEnter {
+			if err := updateApproximation(true); err != nil {
+				u.showError("チャプター", err, u.showChapters)
+				return nil
+			}
+			u.showChapters()
+			return nil
+		}
+		return navigate(event)
+	})
 	u.switchPage("chapters", form)
 }
 

@@ -300,6 +300,7 @@ func TestWorkflowScreensBuildFromDraft(t *testing.T) {
 		Scanner:         uiScanner{},
 		Presets:         uiCatalog{},
 		OutputDirectory: root,
+		ChapterInterval: media.DefaultEpisodeInterval,
 		Now: func() time.Time {
 			return time.Date(2026, 7, 26, 9, 0, 0, 0, time.Local)
 		},
@@ -335,6 +336,7 @@ func TestWorkflowScreensBuildFromDraft(t *testing.T) {
 			},
 		},
 		Base:             "日本語 source",
+		ChapterInterval:  media.DefaultEpisodeInterval,
 		SelectedChapters: []int{1, 2},
 		AudioTracks:      []int{1, 2},
 		Subtitles:        []int{1, 2},
@@ -366,11 +368,35 @@ func TestWorkflowScreensBuildFromDraft(t *testing.T) {
 		t.Fatalf("start index = %d", ui.draft.StartIndex)
 	}
 
-	ui.showChapters()
+	naming := frontPrimitive[*tview.Form](t, ui)
+	naming.SetFocus(0)
+	if event := naming.GetInputCapture()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil {
+		t.Fatalf("naming Enter event = %v, want nil", event)
+	}
 	assertFrontPage(t, ui, "chapters")
 	chapters := frontPrimitive[*tview.Form](t, ui)
-	if chapters.GetFormItemCount() != len(ui.draft.Media.Chapters) {
+	interval := chapters.GetFormItem(0).(*tview.InputField)
+	if interval.GetText() != "23:40" {
+		t.Fatalf("initial interval = %q", interval.GetText())
+	}
+	interval.SetText("45:00")
+	chapters.SetFocus(0)
+	if event := chapters.GetInputCapture()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil {
+		t.Fatalf("chapter interval Enter event = %v, want nil", event)
+	}
+	assertFrontPage(t, ui, "chapters")
+	if ui.draft.ChapterInterval != 45*time.Minute {
+		t.Fatalf("chapter interval = %s", ui.draft.ChapterInterval)
+	}
+	if !reflect.DeepEqual(ui.draft.SelectedChapters, []int{1, 3}) {
+		t.Fatalf("selected chapters = %v, want [1 3]", ui.draft.SelectedChapters)
+	}
+	chapters = frontPrimitive[*tview.Form](t, ui)
+	if chapters.GetFormItemCount() != len(ui.draft.Media.Chapters)+1 {
 		t.Fatalf("chapter items = %d", chapters.GetFormItemCount())
+	}
+	if label := chapters.GetButton(0).GetLabel(); label != "入力した時間の近似値にチェック" {
+		t.Fatalf("approximation button = %q", label)
 	}
 
 	ui.showAudio()
@@ -440,6 +466,7 @@ func TestWorkflowScreensHandleEmptyQueueAndMP4Preview(t *testing.T) {
 		Preset:           handbrake.CuratedPresets()[0],
 		Base:             "source",
 		StartIndex:       1,
+		ChapterInterval:  media.DefaultEpisodeInterval,
 		SelectedChapters: []int{1},
 		AudioTracks:      []int{1},
 		Subtitles:        []int{},
@@ -451,6 +478,40 @@ func TestWorkflowScreensHandleEmptyQueueAndMP4Preview(t *testing.T) {
 	}
 	ui.showPreview()
 	assertFrontPage(t, ui, "preview")
+}
+
+func TestChaptersRejectInvalidChapterInterval(t *testing.T) {
+	root := t.TempDir()
+	service := &app.Service{
+		QueueStore:      &uiStore{q: queue.Empty()},
+		Presets:         uiCatalog{},
+		OutputDirectory: root,
+		ChapterInterval: media.DefaultEpisodeInterval,
+	}
+	ui, err := New(service, &runner.Runner{}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui.draft = app.Draft{
+		Media: media.Info{
+			Chapters: []media.Chapter{{Number: 1, Start: 0}},
+		},
+		Base:             "source",
+		StartIndex:       1,
+		ChapterInterval:  media.DefaultEpisodeInterval,
+		SelectedChapters: []int{1},
+	}
+	ui.showChapters()
+	chapters := frontPrimitive[*tview.Form](t, ui)
+	chapters.GetFormItem(0).(*tview.InputField).SetText("23:60")
+	chapters.SetFocus(0)
+	if event := chapters.GetInputCapture()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil {
+		t.Fatalf("chapter interval Enter event = %v, want nil", event)
+	}
+	assertFrontPage(t, ui, "message")
+	if ui.draft.ChapterInterval != media.DefaultEpisodeInterval {
+		t.Fatalf("invalid input changed interval to %s", ui.draft.ChapterInterval)
+	}
 }
 
 func TestElapsedForDisplayErrorsAndEmptySelection(t *testing.T) {

@@ -28,6 +28,7 @@ func TestDefaultSettings(t *testing.T) {
 		Version:         Version,
 		InputDirectory:  "/Volumes/2TB HDD/Images",
 		OutputDirectory: "/Volumes/2TB HDD/mp4/",
+		ChapterInterval: "23:40",
 	}
 	if got != want {
 		t.Fatalf("DefaultSettings() = %#v, want %#v", got, want)
@@ -40,10 +41,11 @@ func TestSettingsValidate(t *testing.T) {
 		value   Settings
 		errText string
 	}{
-		{"valid", Settings{Version: Version, InputDirectory: "/input", OutputDirectory: "/output"}, ""},
-		{"unknown version", Settings{Version: Version + 1, InputDirectory: "/input", OutputDirectory: "/output"}, "unsupported"},
-		{"relative input", Settings{Version: Version, InputDirectory: "input", OutputDirectory: "/output"}, "input directory"},
-		{"relative output", Settings{Version: Version, InputDirectory: "/input", OutputDirectory: "output"}, "output directory"},
+		{"valid", Settings{Version: Version, InputDirectory: "/input", OutputDirectory: "/output", ChapterInterval: "23:40"}, ""},
+		{"unknown version", Settings{Version: Version + 1, InputDirectory: "/input", OutputDirectory: "/output", ChapterInterval: "23:40"}, "unsupported"},
+		{"relative input", Settings{Version: Version, InputDirectory: "input", OutputDirectory: "/output", ChapterInterval: "23:40"}, "input directory"},
+		{"relative output", Settings{Version: Version, InputDirectory: "/input", OutputDirectory: "output", ChapterInterval: "23:40"}, "output directory"},
+		{"invalid interval", Settings{Version: Version, InputDirectory: "/input", OutputDirectory: "/output", ChapterInterval: "23:60"}, "chapter interval"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -69,7 +71,12 @@ func TestStoreLoadOrCreateAndRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := Store{Path: filepath.Join(root, "data", "settings.json")}
-	defaults := Settings{Version: Version, InputDirectory: input, OutputDirectory: output}
+	defaults := Settings{
+		Version:         Version,
+		InputDirectory:  input,
+		OutputDirectory: output,
+		ChapterInterval: "23:40",
+	}
 
 	got, err := store.LoadOrCreate(defaults)
 	if err != nil {
@@ -109,6 +116,7 @@ func TestStoreDoesNotOverwriteInvalidJSON(t *testing.T) {
 		Version:         Version,
 		InputDirectory:  input,
 		OutputDirectory: output,
+		ChapterInterval: "23:40",
 	})
 	if err == nil {
 		t.Fatal("LoadOrCreate() error = nil")
@@ -147,6 +155,7 @@ func TestValidateDirectories(t *testing.T) {
 				Version:         Version,
 				InputDirectory:  tt.input,
 				OutputDirectory: tt.output,
+				ChapterInterval: "23:40",
 			}
 			err := settings.ValidateDirectories()
 			if tt.errText == "" && err != nil {
@@ -179,12 +188,18 @@ func TestStoreMigratesVersionOneSettings(t *testing.T) {
 		Version:         Version,
 		InputDirectory:  input,
 		OutputDirectory: filepath.Join(root, "unused-output"),
+		ChapterInterval: "23:40",
 	}
 	got, err := store.LoadOrCreate(defaults)
 	if err != nil {
 		t.Fatalf("LoadOrCreate() error = %v", err)
 	}
-	want := Settings{Version: Version, InputDirectory: input, OutputDirectory: output}
+	want := Settings{
+		Version:         Version,
+		InputDirectory:  input,
+		OutputDirectory: output,
+		ChapterInterval: "23:40",
+	}
 	if got != want {
 		t.Fatalf("migrated settings = %#v, want %#v", got, want)
 	}
@@ -194,6 +209,46 @@ func TestStoreMigratesVersionOneSettings(t *testing.T) {
 	}
 	if loaded != want {
 		t.Fatalf("stored migrated settings = %#v, want %#v", loaded, want)
+	}
+}
+
+func TestStoreMigratesVersionTwoSettings(t *testing.T) {
+	root := t.TempDir()
+	input := filepath.Join(root, "input")
+	output := filepath.Join(root, "output")
+	if err := os.Mkdir(input, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(output, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "settings.json")
+	legacy := []byte(
+		"{\n  \"version\": 2,\n  \"input_directory\": \"" + input +
+			"\",\n  \"output_directory\": \"" + output + "\"\n}\n",
+	)
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	defaults := Settings{
+		Version:         Version,
+		InputDirectory:  filepath.Join(root, "unused-input"),
+		OutputDirectory: filepath.Join(root, "unused-output"),
+		ChapterInterval: "25:00",
+	}
+	got, err := (Store{Path: path}).LoadOrCreate(defaults)
+	if err != nil {
+		t.Fatalf("LoadOrCreate() error = %v", err)
+	}
+	want := Settings{
+		Version:         Version,
+		InputDirectory:  input,
+		OutputDirectory: output,
+		ChapterInterval: "25:00",
+	}
+	if got != want {
+		t.Fatalf("migrated settings = %#v, want %#v", got, want)
 	}
 }
 
@@ -214,6 +269,7 @@ func TestStoreDoesNotMigrateInvalidVersionOneSettings(t *testing.T) {
 		Version:         Version,
 		InputDirectory:  input,
 		OutputDirectory: root,
+		ChapterInterval: "23:40",
 	})
 	if err == nil {
 		t.Fatal("LoadOrCreate() error = nil")

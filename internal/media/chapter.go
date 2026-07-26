@@ -2,7 +2,10 @@ package media
 
 import (
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,6 +20,44 @@ type Chapter struct {
 type ChapterRange struct {
 	Start int
 	End   int
+}
+
+// ParseChapterInterval parses a positive M:SS interval. Minutes may exceed 59.
+func ParseChapterInterval(value string) (time.Duration, error) {
+	if value == "" || value != strings.TrimSpace(value) {
+		return 0, fmt.Errorf("chapter interval must use M:SS format: %q", value)
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 || parts[0] == "" || len(parts[1]) != 2 {
+		return 0, fmt.Errorf("chapter interval must use M:SS format: %q", value)
+	}
+	minutes, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("chapter interval minutes must be a non-negative integer: %q", value)
+	}
+	seconds, err := strconv.ParseUint(parts[1], 10, 8)
+	if err != nil || seconds > 59 {
+		return 0, fmt.Errorf("chapter interval seconds must be between 00 and 59: %q", value)
+	}
+	secondsDuration := time.Duration(seconds) * time.Second
+	maxMinutes := uint64((math.MaxInt64 - int64(secondsDuration)) / int64(time.Minute))
+	if minutes > maxMinutes {
+		return 0, fmt.Errorf("chapter interval is too large: %q", value)
+	}
+	interval := time.Duration(minutes)*time.Minute + secondsDuration
+	if interval <= 0 {
+		return 0, fmt.Errorf("chapter interval must be positive: %q", value)
+	}
+	return interval, nil
+}
+
+// FormatChapterInterval formats an interval as total minutes and two-digit seconds.
+func FormatChapterInterval(interval time.Duration) string {
+	if interval <= 0 || interval%time.Second != 0 {
+		return ""
+	}
+	totalSeconds := int64(interval / time.Second)
+	return fmt.Sprintf("%d:%02d", totalSeconds/60, totalSeconds%60)
 }
 
 func (r ChapterRange) ApproximateDuration(chapters []Chapter, total time.Duration) (time.Duration, error) {

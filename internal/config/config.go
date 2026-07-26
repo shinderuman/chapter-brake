@@ -7,19 +7,23 @@ import (
 	"path/filepath"
 
 	"chapterbrake/internal/jsonstore"
+	"chapterbrake/internal/media"
 )
 
 const (
-	Version                = 2
-	legacyVersion          = 1
+	Version                = 3
+	legacyVersionOne       = 1
+	legacyVersionTwo       = 2
 	DefaultInputDirectory  = "/Volumes/2TB HDD/Images"
 	DefaultOutputDirectory = "/Volumes/2TB HDD/mp4/"
+	DefaultChapterInterval = "23:40"
 )
 
 type Settings struct {
 	Version         int    `json:"version"`
 	InputDirectory  string `json:"input_directory"`
 	OutputDirectory string `json:"output_directory"`
+	ChapterInterval string `json:"chapter_interval"`
 }
 
 func DefaultSettings() Settings {
@@ -27,6 +31,7 @@ func DefaultSettings() Settings {
 		Version:         Version,
 		InputDirectory:  DefaultInputDirectory,
 		OutputDirectory: DefaultOutputDirectory,
+		ChapterInterval: DefaultChapterInterval,
 	}
 }
 
@@ -46,6 +51,9 @@ func (s Settings) Validate() error {
 	}
 	if !filepath.IsAbs(s.OutputDirectory) {
 		return fmt.Errorf("output directory must be absolute: %q", s.OutputDirectory)
+	}
+	if _, err := media.ParseChapterInterval(s.ChapterInterval); err != nil {
+		return fmt.Errorf("invalid chapter interval: %w", err)
 	}
 	return nil
 }
@@ -112,9 +120,21 @@ func (s Store) read() (Settings, error) {
 func (s Store) LoadOrCreate(defaults Settings) (Settings, error) {
 	settings, err := s.read()
 	if err == nil {
-		if settings.Version == legacyVersion && settings.InputDirectory == "" {
+		migrated := false
+		switch {
+		case settings.Version == legacyVersionOne &&
+			settings.InputDirectory == "" &&
+			settings.ChapterInterval == "":
 			settings.Version = Version
 			settings.InputDirectory = defaults.InputDirectory
+			settings.ChapterInterval = defaults.ChapterInterval
+			migrated = true
+		case settings.Version == legacyVersionTwo && settings.ChapterInterval == "":
+			settings.Version = Version
+			settings.ChapterInterval = defaults.ChapterInterval
+			migrated = true
+		}
+		if migrated {
 			if err := settings.ValidateDirectories(); err != nil {
 				return Settings{}, fmt.Errorf("validate migrated settings %s: %w", s.Path, err)
 			}
