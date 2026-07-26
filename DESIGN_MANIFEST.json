@@ -1,7 +1,0 @@
-{
-  "project": "ChapterBrake",
-  "repository": "chapterbrake",
-  "command": "chapterbrake",
-  "design_version": 2,
-  "updated_for": "MKV title via mkvpropedit; MP4 title via ffmpeg stream copy; temp output finalization"
-}

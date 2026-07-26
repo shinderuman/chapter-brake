@@ -207,4 +207,4 @@ MP4:
 
 ## 7. PoC完了後
 
-`docs/POC_RESULT_TEMPLATE.md`を複製して`docs/POC_RESULT.md`を作成する。GO判定でも、その時点では実装へ進まず、利用者へ結果を報告して停止する。
+試験結果と最終判定を`docs/POC_RESULT.md`へ記録する。GO判定でも、その時点では実装へ進まず、利用者へ結果を報告して停止する。
