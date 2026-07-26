@@ -214,6 +214,9 @@ func TestFormNavigation(t *testing.T) {
 	if event := capture(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone)); event != nil || escapeCalls != 1 {
 		t.Fatalf("input escape result = %v, escape calls = %d", event, escapeCalls)
 	}
+	if event := capture(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil || nextCalls != 1 {
+		t.Fatalf("input enter result = %v, next calls = %d", event, nextCalls)
+	}
 
 	form.SetFocus(1)
 	checkbox := form.GetFormItem(1).(*tview.Checkbox)
@@ -223,7 +226,7 @@ func TestFormNavigation(t *testing.T) {
 			t.Fatalf("checkbox key %v mapped to key=%v rune=%q", key, event.Key(), event.Rune())
 		}
 	}
-	if event := capture(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil || nextCalls != 1 {
+	if event := capture(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil || nextCalls != 2 {
 		t.Fatalf("checkbox enter result = %v, next calls = %d", event, nextCalls)
 	}
 	if checkbox.IsChecked() {

@@ -254,27 +254,28 @@ func (u *UI) showNaming() {
 		SetText(strconv.Itoa(u.draft.StartIndex)).
 		SetAcceptanceFunc(tview.InputFieldInteger).
 		SetFieldWidth(8)
+	next := func() {
+		value, err := strconv.Atoi(start.GetText())
+		if err != nil || value < 1 {
+			u.showError("出力名", fmt.Errorf("開始番号は1以上にしてください"), u.showNaming)
+			return
+		}
+		if strings.TrimSpace(base.GetText()) == "" {
+			u.showError("出力名", fmt.Errorf("出力ベース名は空にできません"), u.showNaming)
+			return
+		}
+		u.draft.Base = base.GetText()
+		u.draft.StartIndex = value
+		u.showChapters()
+	}
 	form := tview.NewForm().
 		AddFormItem(base).
 		AddFormItem(start).
 		AddTextView("出力先: ", u.service.OutputDirectory, 70, 2, false, false).
-		AddButton("次へ", func() {
-			value, err := strconv.Atoi(start.GetText())
-			if err != nil || value < 1 {
-				u.showError("出力名", fmt.Errorf("開始番号は1以上にしてください"), u.showNaming)
-				return
-			}
-			if strings.TrimSpace(base.GetText()) == "" {
-				u.showError("出力名", fmt.Errorf("出力ベース名は空にできません"), u.showNaming)
-				return
-			}
-			u.draft.Base = base.GetText()
-			u.draft.StartIndex = value
-			u.showChapters()
-		}).
+		AddButton("次へ", next).
 		AddButton("戻る", u.showPreset)
-	form.SetTitle(" 出力名 — ↑↓/Tab:移動 ←→:カーソル BS:削除 Esc:トップ ").SetBorder(true)
-	form.SetInputCapture(formNavigation(form, u.showPreset, u.showMain, nil))
+	form.SetTitle(" 出力名 — Enter:次 ↑↓/Tab:移動 ←→:カーソル BS:削除 Esc:トップ ").SetBorder(true)
+	form.SetInputCapture(formNavigation(form, u.showPreset, u.showMain, next))
 	u.switchPage("naming", form)
 }
 
@@ -724,6 +725,12 @@ func formNavigation(
 			escape()
 			return nil
 		}
+		if item != nil && event.Key() == tcell.KeyEnter {
+			if next != nil {
+				next()
+			}
+			return nil
+		}
 		if isInput {
 			switch event.Key() {
 			case tcell.KeyUp:
@@ -733,13 +740,6 @@ func formNavigation(
 			}
 			return event
 		}
-		if isCheckbox && event.Key() == tcell.KeyEnter {
-			if next != nil {
-				next()
-			}
-			return nil
-		}
-
 		switch event.Key() {
 		case tcell.KeyBackspace, tcell.KeyBackspace2:
 			back()
