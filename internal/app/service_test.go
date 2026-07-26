@@ -20,9 +20,26 @@ type serviceStore struct {
 }
 
 func (s *serviceStore) Load() (queue.Queue, error) { return s.q, nil }
-func (s *serviceStore) Save(q queue.Queue) error {
-	s.q = q
-	return nil
+func (s *serviceStore) AppendJobs(jobs ...queue.Job) error {
+	next, err := s.q.Append(jobs...)
+	if err == nil {
+		s.q = next
+	}
+	return err
+}
+func (s *serviceStore) DeleteJob(id string) error {
+	next, err := s.q.RemoveJob(id)
+	if err == nil {
+		s.q = next
+	}
+	return err
+}
+func (s *serviceStore) MoveJob(id string, delta int) error {
+	next, err := s.q.MoveJob(id, delta)
+	if err == nil {
+		s.q = next
+	}
+	return err
 }
 
 type serviceScanner struct {
@@ -90,7 +107,7 @@ func TestAnalyzeInitialSelections(t *testing.T) {
 	if draft.ChapterInterval != media.DefaultEpisodeInterval {
 		t.Fatalf("chapter interval = %s", draft.ChapterInterval)
 	}
-	if !reflect.DeepEqual(draft.SelectedChapters, []int{1, 2, 3}) {
+	if !reflect.DeepEqual(draft.SelectedChapters, []int{1, 2}) {
 		t.Fatalf("selected chapters = %v", draft.SelectedChapters)
 	}
 	if !reflect.DeepEqual(draft.AudioTracks, []int{1, 2}) {
@@ -111,14 +128,56 @@ func TestAnalyzeUsesConfiguredChapterInterval(t *testing.T) {
 	if got.ChapterInterval != 45*time.Minute {
 		t.Fatalf("chapter interval = %s", got.ChapterInterval)
 	}
-	if !reflect.DeepEqual(got.SelectedChapters, []int{1, 3}) {
-		t.Fatalf("selected chapters = %v, want [1 3]", got.SelectedChapters)
+	if !reflect.DeepEqual(got.SelectedChapters, []int{1}) {
+		t.Fatalf("selected chapters = %v, want [1]", got.SelectedChapters)
 	}
 
 	service.ChapterInterval = 0
 	if _, err := service.Analyze(context.Background(), draft.Input); err == nil ||
 		!strings.Contains(err.Error(), "chapter interval") {
 		t.Fatalf("Analyze() invalid interval error = %v", err)
+	}
+}
+
+func TestAnalyzeAndPreviewExcludeShortFinalChapter(t *testing.T) {
+	service, draft, _ := testService(t)
+	info := draft.Media
+	info.Duration = 47*time.Minute + 31*time.Second
+	info.Chapters[2].Start = 47*time.Minute + 30*time.Second
+	service.Scanner = serviceScanner{info: info}
+
+	draft, err := service.Analyze(context.Background(), draft.Input)
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if !draft.ExcludeFinal {
+		t.Fatal("ExcludeFinal = false")
+	}
+	if !reflect.DeepEqual(draft.SelectedChapters, []int{1, 2}) {
+		t.Fatalf("selected chapters = %v, want [1 2]", draft.SelectedChapters)
+	}
+
+	draft.Preset = handbrake.CuratedPresets()[1]
+	draft.StartIndex = 1
+	preview, err := service.BuildPreview(draft)
+	if err != nil {
+		t.Fatalf("BuildPreview() error = %v", err)
+	}
+	if len(preview.Jobs) != 2 || preview.Jobs[1].ChapterEnd != 2 {
+		t.Fatalf("preview jobs = %#v", preview.Jobs)
+	}
+	if preview.ExcludedFinal == nil ||
+		*preview.ExcludedFinal != (media.ChapterRange{Start: 3, End: 3}) {
+		t.Fatalf("excluded final = %#v", preview.ExcludedFinal)
+	}
+
+	draft.ExcludeFinal = false
+	preview, err = service.BuildPreview(draft)
+	if err != nil {
+		t.Fatalf("BuildPreview(include final) error = %v", err)
+	}
+	if preview.Jobs[len(preview.Jobs)-1].ChapterEnd != 3 || preview.ExcludedFinal != nil {
+		t.Fatalf("included final preview = %#v", preview)
 	}
 }
 
@@ -129,7 +188,7 @@ func TestInitializeNamingUsesQueueAndFiles(t *testing.T) {
 		ID:           "queued",
 		CreatedAt:    time.Now(),
 		Input:        draft.Input,
-		Output:       filepath.Join(service.OutputDirectory, "番組_03.mkv"),
+		Output:       filepath.Join(service.OutputDirectory, "番組", "番組_03.mkv"),
 		Preset:       "1080p MKV",
 		Container:    queue.ContainerMKV,
 		ChapterStart: 1,
@@ -138,7 +197,11 @@ func TestInitializeNamingUsesQueueAndFiles(t *testing.T) {
 		Subtitles:    []int{},
 	}
 	store.q.Jobs = append(store.q.Jobs, queued)
-	if err := os.WriteFile(filepath.Join(service.OutputDirectory, "番組_09.mkv"), nil, 0o600); err != nil {
+	outputDirectory := filepath.Join(service.OutputDirectory, "番組")
+	if err := os.MkdirAll(outputDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outputDirectory, "番組_09.mkv"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.InitializeNaming(&draft); err != nil {
@@ -155,7 +218,11 @@ func TestBuildAndAddPreview(t *testing.T) {
 	draft.SelectedChapters = []int{2, 3}
 	draft.StartIndex = 1
 	draft.Subtitles = []int{1, 2}
-	collision := filepath.Join(service.OutputDirectory, "番組_01.mkv")
+	outputDirectory := filepath.Join(service.OutputDirectory, "番組")
+	if err := os.MkdirAll(outputDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	collision := filepath.Join(outputDirectory, "番組_01.mkv")
 	if err := os.WriteFile(collision, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -166,6 +233,9 @@ func TestBuildAndAddPreview(t *testing.T) {
 	}
 	if len(preview.Jobs) != 2 || len(preview.Collisions) != 1 {
 		t.Fatalf("preview = %#v", preview)
+	}
+	if got, want := filepath.Dir(preview.Jobs[0].Output), outputDirectory; got != want {
+		t.Fatalf("output directory = %q, want %q", got, want)
 	}
 	if preview.Excluded == nil || *preview.Excluded != (media.ChapterRange{Start: 1, End: 1}) {
 		t.Fatalf("excluded = %#v", preview.Excluded)
@@ -179,8 +249,17 @@ func TestBuildAndAddPreview(t *testing.T) {
 	if err := service.AddPreview(preview, true); err != nil {
 		t.Fatalf("AddPreview() error = %v", err)
 	}
+	if info, err := os.Stat(outputDirectory); err != nil || !info.IsDir() {
+		t.Fatalf("output title directory was not created: %v", err)
+	}
 	if len(store.q.Jobs) != 2 {
 		t.Fatalf("queue jobs = %d", len(store.q.Jobs))
+	}
+	if err := service.DeleteQueuedJob(store.q.Jobs[0].ID); err != nil {
+		t.Fatalf("DeleteQueuedJob() error = %v", err)
+	}
+	if len(store.q.Jobs) != 1 {
+		t.Fatalf("queue jobs after delete = %d", len(store.q.Jobs))
 	}
 }
 

@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const DefaultEpisodeInterval = 23*time.Minute + 40*time.Second
+const (
+	DefaultEpisodeInterval     = 23*time.Minute + 40*time.Second
+	ShortFinalChapterThreshold = 2 * time.Second
+)
 
 type Chapter struct {
 	Number int
@@ -20,6 +23,36 @@ type Chapter struct {
 type ChapterRange struct {
 	Start int
 	End   int
+}
+
+type Approximation struct {
+	Starts     []int
+	TailMerged bool
+}
+
+func FinalChapterDuration(chapters []Chapter, total time.Duration) (time.Duration, error) {
+	if err := ValidateChapters(chapters); err != nil {
+		return 0, err
+	}
+	last := chapters[len(chapters)-1]
+	if total < last.Start {
+		return 0, fmt.Errorf("media duration %s is before final chapter start %s", total, last.Start)
+	}
+	return total - last.Start, nil
+}
+
+func HasShortFinalChapter(chapters []Chapter, total time.Duration) (bool, error) {
+	if len(chapters) < 2 {
+		if err := ValidateChapters(chapters); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	duration, err := FinalChapterDuration(chapters, total)
+	if err != nil {
+		return false, err
+	}
+	return duration <= ShortFinalChapterThreshold, nil
 }
 
 // ParseChapterInterval parses a positive M:SS interval. Minutes may exceed 59.
@@ -98,19 +131,27 @@ func ValidateChapters(chapters []Chapter) error {
 }
 
 // ApproximateStarts selects chapter starts nearest to repeated interval targets.
-// Equal distances choose the earlier chapter.
-func ApproximateStarts(chapters []Chapter, interval time.Duration) ([]int, error) {
+// Equal distances choose the earlier chapter. A final-chapter candidate is
+// kept attached to the preceding output when the complete remaining tail is
+// already close enough to one interval.
+func ApproximateStarts(chapters []Chapter, total, interval time.Duration) (Approximation, error) {
 	if err := ValidateChapters(chapters); err != nil {
-		return nil, err
+		return Approximation{}, err
+	}
+	if total < chapters[len(chapters)-1].Start {
+		return Approximation{}, fmt.Errorf("media duration %s is before final chapter start %s", total, chapters[len(chapters)-1].Start)
 	}
 	if interval <= 0 {
-		return nil, fmt.Errorf("interval must be positive")
+		return Approximation{}, fmt.Errorf("interval must be positive")
 	}
 
 	selected := []int{chapters[0].Number}
 	currentIndex := 0
 	for currentIndex < len(chapters)-1 {
 		target := chapters[currentIndex].Start + interval
+		if target >= total {
+			return Approximation{Starts: selected, TailMerged: currentIndex < len(chapters)-1}, nil
+		}
 		bestIndex := currentIndex + 1
 		bestDistance := durationDistance(chapters[bestIndex].Start, target)
 		for i := bestIndex + 1; i < len(chapters); i++ {
@@ -120,10 +161,14 @@ func ApproximateStarts(chapters []Chapter, interval time.Duration) ([]int, error
 				bestDistance = distance
 			}
 		}
+		if bestIndex == len(chapters)-1 &&
+			total-chapters[currentIndex].Start <= interval+interval/2 {
+			return Approximation{Starts: selected, TailMerged: true}, nil
+		}
 		selected = append(selected, chapters[bestIndex].Number)
 		currentIndex = bestIndex
 	}
-	return selected, nil
+	return Approximation{Starts: selected}, nil
 }
 
 func durationDistance(a, b time.Duration) time.Duration {
@@ -161,6 +206,47 @@ func RangesFromStarts(selected []int, finalChapter int) ([]ChapterRange, error) 
 		ranges[i] = ChapterRange{Start: start, End: end}
 	}
 	return ranges, nil
+}
+
+func ChapterDurations(chapters []Chapter, total time.Duration) ([]time.Duration, error) {
+	if err := ValidateChapters(chapters); err != nil {
+		return nil, err
+	}
+	if total < chapters[len(chapters)-1].Start {
+		return nil, fmt.Errorf("media duration %s is before final chapter start %s", total, chapters[len(chapters)-1].Start)
+	}
+	durations := make([]time.Duration, len(chapters))
+	for i := range chapters {
+		end := total
+		if i+1 < len(chapters) {
+			end = chapters[i+1].Start
+		}
+		durations[i] = end - chapters[i].Start
+	}
+	return durations, nil
+}
+
+// OutputDurations returns the complete duration produced from each selected
+// chapter start. Unselected chapters have no value.
+func OutputDurations(chapters []Chapter, total time.Duration, selected []int, finalChapter int) ([]time.Duration, []bool, error) {
+	if err := ValidateChapters(chapters); err != nil {
+		return nil, nil, err
+	}
+	ranges, err := RangesFromStarts(selected, finalChapter)
+	if err != nil {
+		return nil, nil, err
+	}
+	durations := make([]time.Duration, len(chapters))
+	available := make([]bool, len(chapters))
+	for _, chapterRange := range ranges {
+		duration, err := chapterRange.ApproximateDuration(chapters, total)
+		if err != nil {
+			return nil, nil, err
+		}
+		durations[chapterRange.Start-1] = duration
+		available[chapterRange.Start-1] = true
+	}
+	return durations, available, nil
 }
 
 // ElapsedFromPreviousSelection returns each chapter's elapsed time from the

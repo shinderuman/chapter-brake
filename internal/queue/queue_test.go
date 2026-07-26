@@ -3,6 +3,7 @@ package queue
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -114,11 +115,57 @@ func TestQueueOperations(t *testing.T) {
 	}
 }
 
+func TestQueueRemoveJob(t *testing.T) {
+	first := validJob()
+	second := validJob()
+	second.ID = "second"
+	second.Output = "/Volumes/Output/source_02.mkv"
+	q, err := Empty().Append(first, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	q, err = q.RemoveJob(first.ID)
+	if err != nil {
+		t.Fatalf("RemoveJob() error = %v", err)
+	}
+	if len(q.Jobs) != 1 || q.Jobs[0].ID != second.ID {
+		t.Fatalf("RemoveJob() = %#v", q)
+	}
+	if _, err := q.RemoveJob("missing"); err == nil {
+		t.Fatal("RemoveJob(missing) error = nil")
+	}
+}
+
 func TestQueueRejectsDuplicateIDs(t *testing.T) {
 	job := validJob()
 	q := Queue{Version: Version, Jobs: []Job{job, job}}
 	if err := q.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate id") {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestQueueMoveJob(t *testing.T) {
+	first := validJob()
+	second := validJob()
+	second.ID = "second"
+	second.Output = "/Volumes/Output/source_02.mkv"
+	third := validJob()
+	third.ID = "third"
+	third.Output = "/Volumes/Output/source_03.mkv"
+	q := Queue{Version: Version, Jobs: []Job{first, second, third}}
+
+	moved, err := q.MoveJob(third.ID, -1)
+	if err != nil {
+		t.Fatalf("MoveJob() error = %v", err)
+	}
+	got := []string{moved.Jobs[0].ID, moved.Jobs[1].ID, moved.Jobs[2].ID}
+	want := []string{first.ID, third.ID, second.ID}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("MoveJob() order = %v, want %v", got, want)
+	}
+	if _, err := q.MoveJob(second.ID, 2); err == nil {
+		t.Fatal("MoveJob(invalid delta) error = nil")
 	}
 }
 
@@ -147,6 +194,111 @@ func TestStoreLoadOrCreateAndInvalidFiles(t *testing.T) {
 		}
 		if len(got.Jobs) != 1 || got.Jobs[0].ID != withJob.Jobs[0].ID {
 			t.Fatalf("Load() = %#v", got)
+		}
+
+		second := validJob()
+		second.ID = "second"
+		second.Output = "/Volumes/Output/source_02.mkv"
+		if err := store.AppendJobs(second); err != nil {
+			t.Fatalf("AppendJobs() error = %v", err)
+		}
+		if err := store.DeleteJob(second.ID); err != nil {
+			t.Fatalf("DeleteJob() error = %v", err)
+		}
+		head, ok, err := store.ClaimHead()
+		if err != nil || !ok || head.ID != withJob.Jobs[0].ID {
+			t.Fatalf("ClaimHead() = %#v, %t, %v", head, ok, err)
+		}
+		if err := store.DeleteJob(head.ID); err == nil {
+			t.Fatal("DeleteJob(active) error = nil")
+		}
+		if err := store.CompleteHead(head.ID); err != nil {
+			t.Fatalf("CompleteHead() error = %v", err)
+		}
+		got, err = store.Load()
+		if err != nil || len(got.Jobs) != 0 {
+			t.Fatalf("queue after mutations = %#v, %v", got, err)
+		}
+	})
+
+	t.Run("release claimed head", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "queue.json")
+		store := Store{Path: path}
+		if err := store.Save(Queue{Version: Version, Jobs: []Job{validJob()}}); err != nil {
+			t.Fatal(err)
+		}
+		head, ok, err := store.ClaimHead()
+		if err != nil || !ok {
+			t.Fatalf("ClaimHead() = %#v, %t, %v", head, ok, err)
+		}
+		if _, _, err := store.ClaimHead(); err == nil {
+			t.Fatal("second ClaimHead() error = nil")
+		}
+		if err := store.ReleaseHead(head.ID); err != nil {
+			t.Fatalf("ReleaseHead() error = %v", err)
+		}
+		if _, ok, err := store.ClaimHead(); err != nil || !ok {
+			t.Fatalf("ClaimHead(after release) ok = %t, error = %v", ok, err)
+		}
+	})
+
+	t.Run("append while head is active", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "queue.json")
+		store := Store{Path: path}
+		first := validJob()
+		if err := store.Save(Queue{Version: Version, Jobs: []Job{first}}); err != nil {
+			t.Fatal(err)
+		}
+		head, ok, err := store.ClaimHead()
+		if err != nil || !ok {
+			t.Fatalf("ClaimHead() = %#v, %t, %v", head, ok, err)
+		}
+		second := validJob()
+		second.ID = "second"
+		second.Output = "/Volumes/Output/source_02.mkv"
+		if err := store.AppendJobs(second); err != nil {
+			t.Fatalf("AppendJobs(active) error = %v", err)
+		}
+		if err := store.CompleteHead(first.ID); err != nil {
+			t.Fatalf("CompleteHead() error = %v", err)
+		}
+		got, err := store.Load()
+		if err != nil || len(got.Jobs) != 1 || got.Jobs[0].ID != second.ID {
+			t.Fatalf("queue after append and complete = %#v, %v", got, err)
+		}
+	})
+
+	t.Run("move waiting jobs while head is active", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "queue.json")
+		store := Store{Path: path}
+		first := validJob()
+		second := validJob()
+		second.ID = "second"
+		second.Output = "/Volumes/Output/source_02.mkv"
+		third := validJob()
+		third.ID = "third"
+		third.Output = "/Volumes/Output/source_03.mkv"
+		if err := store.Save(Queue{Version: Version, Jobs: []Job{first, second, third}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, err := store.ClaimHead(); err != nil || !ok {
+			t.Fatalf("ClaimHead() ok = %t, error = %v", ok, err)
+		}
+		if err := store.MoveJob(third.ID, -1); err != nil {
+			t.Fatalf("MoveJob(waiting) error = %v", err)
+		}
+		if err := store.MoveJob(third.ID, -1); err == nil {
+			t.Fatal("MoveJob(ahead of active) error = nil")
+		}
+		if err := store.MoveJob(first.ID, 1); err == nil {
+			t.Fatal("MoveJob(active) error = nil")
+		}
+		got, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Jobs[0].ID != first.ID || got.Jobs[1].ID != third.ID {
+			t.Fatalf("queue order = %#v", got.Jobs)
 		}
 	})
 

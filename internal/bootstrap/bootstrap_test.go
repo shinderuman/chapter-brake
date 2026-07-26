@@ -13,6 +13,7 @@ import (
 
 	"chapterbrake/internal/app"
 	"chapterbrake/internal/config"
+	"chapterbrake/internal/instance"
 	"chapterbrake/internal/media"
 	"chapterbrake/internal/process"
 	"chapterbrake/internal/runner"
@@ -221,6 +222,20 @@ func TestRunShutsDownTerminalWhenContextIsCanceled(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("run() did not stop after cancellation")
+	}
+}
+
+func TestRunRejectsSecondInstance(t *testing.T) {
+	deps, dataDirectory, _, _ := testDependencies(t)
+	lock, err := instance.Acquire(filepath.Join(dataDirectory, "chapterbrake.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	err = run(context.Background(), deps, runOptions{})
+	if !errors.Is(err, instance.ErrAlreadyRunning) {
+		t.Fatalf("run() error = %v", err)
 	}
 }
 

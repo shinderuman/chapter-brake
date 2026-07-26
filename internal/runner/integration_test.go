@@ -66,7 +66,7 @@ func TestRealToolchainIntegration(t *testing.T) {
 				AudioTracks:  []int{1},
 				Subtitles:    subtitles,
 			}
-			store := queue.Store{Path: filepath.Join(root, "queue.json")}
+			store := &queue.Store{Path: filepath.Join(root, "queue.json")}
 			if err := store.Save(queue.Queue{Version: queue.Version, Jobs: []queue.Job{job}}); err != nil {
 				t.Fatal(err)
 			}

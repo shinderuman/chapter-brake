@@ -14,6 +14,7 @@ import (
 	"chapterbrake/internal/app"
 	"chapterbrake/internal/config"
 	"chapterbrake/internal/handbrake"
+	"chapterbrake/internal/instance"
 	"chapterbrake/internal/logging"
 	"chapterbrake/internal/media"
 	"chapterbrake/internal/metadata"
@@ -48,7 +49,7 @@ func Run(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	return run(ctx, productionDependencies(), opts)
 }
@@ -103,6 +104,12 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 	if err != nil {
 		return err
 	}
+	appLock, err := instance.Acquire(filepath.Join(dataDirectory, "chapterbrake.lock"))
+	if err != nil {
+		return err
+	}
+	defer appLock.Close()
+
 	settingsStore := config.Store{Path: filepath.Join(dataDirectory, "settings.json")}
 	settings, err := settingsStore.LoadOrCreate(config.DefaultSettings())
 	if err != nil {
@@ -128,7 +135,7 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 		}
 		initialDirectorySource = "command-line"
 	}
-	queueStore := queue.Store{Path: filepath.Join(dataDirectory, "queue.json")}
+	queueStore := &queue.Store{Path: filepath.Join(dataDirectory, "queue.json")}
 	if _, err := queueStore.LoadOrCreate(); err != nil {
 		return err
 	}

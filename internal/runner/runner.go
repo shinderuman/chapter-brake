@@ -19,8 +19,9 @@ import (
 )
 
 type QueueStore interface {
-	Load() (queue.Queue, error)
-	Save(queue.Queue) error
+	ClaimHead() (queue.Job, bool, error)
+	ReleaseHead(string) error
+	CompleteHead(string) error
 }
 
 type MediaScanner interface {
@@ -39,17 +40,20 @@ type Runner struct {
 	LogDirectory string
 	AppLogger    *slog.Logger
 
-	HandBrake   string
-	FFmpeg      string
-	FFProbe     string
-	MKVPropEdit string
-	Now         func() time.Time
-	Progress    func(string, handbrake.Progress)
-	Stage       func(string, string)
+	HandBrake      string
+	FFmpeg         string
+	FFProbe        string
+	MKVPropEdit    string
+	Now            func() time.Time
+	Progress       func(string, handbrake.Progress)
+	Stage          func(string, string)
+	Completed      func(string)
+	PauseRequested func() bool
 }
 
 type Result struct {
 	Completed int
+	Paused    bool
 }
 
 type JobError struct {
@@ -75,21 +79,24 @@ func (r Runner) Run(ctx context.Context) (Result, error) {
 	if err := r.validate(); err != nil {
 		return Result{}, err
 	}
-	q, err := r.Store.Load()
-	if err != nil {
-		return Result{}, fmt.Errorf("load queue: %w", err)
-	}
-
 	var result Result
-	for len(q.Jobs) > 0 {
+	for {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		job := q.Jobs[0]
+		job, ok, err := r.Store.ClaimHead()
+		if err != nil {
+			return result, fmt.Errorf("claim queue head: %w", err)
+		}
+		if !ok {
+			return result, nil
+		}
 		r.logInfo("job starting", "job_id", job.ID, "output", job.Output)
 
 		logPath, stage, err := r.runJob(ctx, job)
 		if err != nil {
+			releaseErr := r.Store.ReleaseHead(job.ID)
+			err = errors.Join(err, releaseErr)
 			canceled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 			r.logError("job failed",
 				"job_id", job.ID,
@@ -107,18 +114,20 @@ func (r Runner) Run(ctx context.Context) (Result, error) {
 			}
 		}
 
-		next, err := q.RemoveHead()
-		if err != nil {
-			return result, &JobError{JobID: job.ID, Stage: "queue-remove-head", LogPath: logPath, Err: err}
-		}
-		if err := r.Store.Save(next); err != nil {
+		if err := r.Store.CompleteHead(job.ID); err != nil {
+			err = errors.Join(err, r.Store.ReleaseHead(job.ID))
 			return result, &JobError{JobID: job.ID, Stage: "queue-save", LogPath: logPath, Err: err}
 		}
-		q = next
 		result.Completed++
+		if r.Completed != nil {
+			r.Completed(job.ID)
+		}
 		r.logInfo("job completed", "job_id", job.ID, "output", job.Output, "log_path", logPath)
+		if r.PauseRequested != nil && r.PauseRequested() {
+			result.Paused = true
+			return result, nil
+		}
 	}
-	return result, nil
 }
 
 func (r Runner) runJob(ctx context.Context, job queue.Job) (logPath string, stage string, resultErr error) {

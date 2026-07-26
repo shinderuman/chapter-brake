@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,7 +20,9 @@ import (
 
 type QueueStore interface {
 	Load() (queue.Queue, error)
-	Save(queue.Queue) error
+	AppendJobs(...queue.Job) error
+	DeleteJob(string) error
+	MoveJob(string, int) error
 }
 
 type Scanner interface {
@@ -54,12 +57,15 @@ type Draft struct {
 	AudioTracks      []int
 	Subtitles        []int
 	AutoChapters     bool
+	TailMerged       bool
+	ExcludeFinal     bool
 }
 
 type Preview struct {
-	Jobs       []queue.Job
-	Collisions []string
-	Excluded   *media.ChapterRange
+	Jobs          []queue.Job
+	Collisions    []string
+	Excluded      *media.ChapterRange
+	ExcludedFinal *media.ChapterRange
 }
 
 func (s *Service) Analyze(ctx context.Context, input string) (Draft, error) {
@@ -86,9 +92,17 @@ func (s *Service) Analyze(ctx context.Context, input string) (Draft, error) {
 	if s.ChapterInterval <= 0 {
 		return Draft{}, fmt.Errorf("chapter interval must be positive")
 	}
-	selected, err := media.ApproximateStarts(mediaInfo.Chapters, s.ChapterInterval)
+	approximation, err := media.ApproximateStarts(mediaInfo.Chapters, mediaInfo.Duration, s.ChapterInterval)
 	if err != nil {
 		return Draft{}, err
+	}
+	selected := approximation.Starts
+	excludeFinal, err := media.HasShortFinalChapter(mediaInfo.Chapters, mediaInfo.Duration)
+	if err != nil {
+		return Draft{}, err
+	}
+	if excludeFinal {
+		selected = withoutChapter(selected, len(mediaInfo.Chapters))
 	}
 	base, err := naming.InputBase(input)
 	if err != nil {
@@ -113,6 +127,8 @@ func (s *Service) Analyze(ctx context.Context, input string) (Draft, error) {
 		AudioTracks:      audio,
 		Subtitles:        []int{},
 		AutoChapters:     true,
+		TailMerged:       approximation.TailMerged,
+		ExcludeFinal:     excludeFinal,
 	}, nil
 }
 
@@ -130,14 +146,14 @@ func (s *Service) InitializeNaming(draft *Draft) error {
 	if err != nil {
 		return err
 	}
-	handle, err := os.Open(s.OutputDirectory)
-	if err != nil {
-		return fmt.Errorf("open output directory: %w", err)
+	outputDirectory := filepath.Join(s.OutputDirectory, draft.Base)
+	var entries []string
+	directoryEntries, err := os.ReadDir(outputDirectory)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read output directory: %w", err)
 	}
-	entries, err := handle.Readdirnames(-1)
-	closeErr := handle.Close()
-	if err != nil || closeErr != nil {
-		return fmt.Errorf("read output directory: %w", errorsJoin(err, closeErr))
+	for _, entry := range directoryEntries {
+		entries = append(entries, entry.Name())
 	}
 	queued := make([]string, len(q.Jobs))
 	for i, job := range q.Jobs {
@@ -155,7 +171,16 @@ func (s *Service) BuildPreview(draft Draft) (Preview, error) {
 	if err := draft.Preset.Validate(); err != nil {
 		return Preview{}, err
 	}
-	ranges, err := media.RangesFromStarts(draft.SelectedChapters, len(draft.Media.Chapters))
+	finalChapter := len(draft.Media.Chapters)
+	selectedChapters := append([]int(nil), draft.SelectedChapters...)
+	if draft.ExcludeFinal {
+		if finalChapter < 2 {
+			return Preview{}, fmt.Errorf("the only chapter cannot be excluded")
+		}
+		selectedChapters = withoutChapter(selectedChapters, finalChapter)
+		finalChapter--
+	}
+	ranges, err := media.RangesFromStarts(selectedChapters, finalChapter)
 	if err != nil {
 		return Preview{}, err
 	}
@@ -169,7 +194,7 @@ func (s *Service) BuildPreview(draft Draft) (Preview, error) {
 		return Preview{}, err
 	}
 	outputs, err := naming.OutputPaths(
-		s.OutputDirectory,
+		filepath.Join(s.OutputDirectory, draft.Base),
 		draft.Base,
 		draft.StartIndex,
 		len(ranges),
@@ -208,7 +233,23 @@ func (s *Service) BuildPreview(draft Draft) (Preview, error) {
 	if ranges[0].Start > 1 {
 		preview.Excluded = &media.ChapterRange{Start: 1, End: ranges[0].Start - 1}
 	}
+	if draft.ExcludeFinal {
+		preview.ExcludedFinal = &media.ChapterRange{
+			Start: len(draft.Media.Chapters),
+			End:   len(draft.Media.Chapters),
+		}
+	}
 	return preview, nil
+}
+
+func withoutChapter(chapters []int, excluded int) []int {
+	result := make([]int, 0, len(chapters))
+	for _, chapter := range chapters {
+		if chapter != excluded {
+			result = append(result, chapter)
+		}
+	}
+	return result
 }
 
 func (s *Service) AddPreview(preview Preview, overwriteApproved bool) error {
@@ -218,15 +259,12 @@ func (s *Service) AddPreview(preview Preview, overwriteApproved bool) error {
 	if len(preview.Collisions) > 0 && !overwriteApproved {
 		return fmt.Errorf("%d existing outputs require explicit overwrite approval", len(preview.Collisions))
 	}
-	q, err := s.QueueStore.Load()
-	if err != nil {
-		return err
+	for _, job := range preview.Jobs {
+		if err := os.MkdirAll(filepath.Dir(job.Output), 0o755); err != nil {
+			return fmt.Errorf("create output directory: %w", err)
+		}
 	}
-	next, err := q.Append(preview.Jobs...)
-	if err != nil {
-		return err
-	}
-	return s.QueueStore.Save(next)
+	return s.QueueStore.AppendJobs(preview.Jobs...)
 }
 
 func (s *Service) Queue() (queue.Queue, error) {
@@ -234,6 +272,20 @@ func (s *Service) Queue() (queue.Queue, error) {
 		return queue.Queue{}, fmt.Errorf("queue store is nil")
 	}
 	return s.QueueStore.Load()
+}
+
+func (s *Service) DeleteQueuedJob(id string) error {
+	if s.QueueStore == nil {
+		return fmt.Errorf("queue store is nil")
+	}
+	return s.QueueStore.DeleteJob(id)
+}
+
+func (s *Service) MoveQueuedJob(id string, delta int) error {
+	if s.QueueStore == nil {
+		return fmt.Errorf("queue store is nil")
+	}
+	return s.QueueStore.MoveJob(id, delta)
 }
 
 func validateSubtitles(selected []int, available []media.SubtitleTrack) error {
@@ -264,13 +316,4 @@ func (s *Service) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
-}
-
-func errorsJoin(errs ...error) error {
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }

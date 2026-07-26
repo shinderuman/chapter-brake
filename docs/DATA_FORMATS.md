@@ -17,16 +17,16 @@
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "input_directory": "/Volumes/2TB HDD/Images",
-  "output_directory": "/Volumes/2TB HDD/mp4/",
+  "output_directory": "/Volumes/2TB HDD/Movies",
   "chapter_interval": "23:40"
 }
 ```
 
 要件:
 
-- `version`は必須で3。
+- `version`は必須で4。
 - `input_directory`と`output_directory`は絶対パス。
 - `chapter_interval`は正の`分:秒`形式とする。分は59を超えてよく、秒は
   `00`から`59`の2桁とする。
@@ -34,14 +34,18 @@
   検証する。
 - ファイルがなければ既定値で作成する。
 - version 1の既知形式は`output_directory`を維持し、既定の
-  `input_directory`と`chapter_interval`を追加してversion 3へ原子的に移行する。
+  `input_directory`と`chapter_interval`を追加してversion 4へ原子的に移行する。
 - version 2の既知形式は入出力先を維持し、既定の`chapter_interval`を追加して
-  version 3へ原子的に移行する。
+  version 4へ原子的に移行する。
+- version 3は既存値を維持してversion 4へ移行する。ただし出力先が旧既定値
+  `/Volumes/2TB HDD/mp4/`の場合だけ新既定値`/Volumes/2TB HDD/Movies`へ変更する。
 - JSON不正または未知のversionの場合はエラーで停止し、勝手に上書きしない。
 - `--directory PATH`または`-d PATH`は、一回の起動だけファイル選択の初期位置を
   指定ディレクトリへ差し替え、設定ファイルを書き換えない。相対パスも許可する。
 - チャプター分割画面で変更した区切り時間もそのジョブ追加フローだけに適用し、
   `settings.json`へ書き戻さない。キューには確定したチャプター範囲だけを保存する。
+- 末尾チャプター除外の選択も補助設定としてキューへ保存せず、確定した
+  `chapter_start`と`chapter_end`だけを保存する。
 - 初期版では設定編集UIを作らない。
 
 ## queue.json
@@ -56,7 +60,7 @@
       "id": "20260723T143012.123456789-0001",
       "created_at": "2026-07-23T14:30:12.123456789+09:00",
       "input": "/Volumes/Video/source.mkv",
-      "output": "/Volumes/2TB HDD/mp4/source_01.mkv",
+      "output": "/Volumes/2TB HDD/Movies/source/source_01.mkv",
       "preset": "My H.265 MKV",
       "container": "mkv",
       "chapter_start": 1,
@@ -74,6 +78,9 @@
 - 先頭ジョブが実行中でも成功するまで残る。
 - `status`は初期版では持たない。
 - 成功時に先頭要素だけ削除する。
+- TUIの削除操作もジョブIDで対象を特定して原子的に保存する。実行中ジョブは
+  削除を拒否する。
+- TUIの並び替え操作は隣接ジョブを入れ替えて原子的に保存する。実行中先頭は固定する。
 - `input`と`output`は絶対パス。
 - `container`は`mp4`または`mkv`。
 - `chapter_start`と`chapter_end`は1以上で、開始<=終了。
@@ -110,7 +117,9 @@
 
 ## 一時出力
 
-一時出力は最終出力と同じディレクトリへ置き、最終公開を同一ファイルシステム上のrenameで行えるようにする。
+一時出力は最終出力と同じ
+`<output_directory>/<出力ベース名>/`ディレクトリへ置き、最終公開を
+同一ファイルシステム上のrenameで行えるようにする。
 
 概念例:
 

@@ -27,7 +27,7 @@ func TestDefaultSettings(t *testing.T) {
 	want := Settings{
 		Version:         Version,
 		InputDirectory:  "/Volumes/2TB HDD/Images",
-		OutputDirectory: "/Volumes/2TB HDD/mp4/",
+		OutputDirectory: "/Volumes/2TB HDD/Movies",
 		ChapterInterval: "23:40",
 	}
 	if got != want {
@@ -249,6 +249,69 @@ func TestStoreMigratesVersionTwoSettings(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("migrated settings = %#v, want %#v", got, want)
+	}
+}
+
+func TestStoreMigratesVersionThreeDefaultOutput(t *testing.T) {
+	root := t.TempDir()
+	input := filepath.Join(root, "input")
+	oldOutput := filepath.Join(root, "old-output")
+	newOutput := filepath.Join(root, "Movies")
+	for _, directory := range []string{input, oldOutput, newOutput} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	path := filepath.Join(root, "settings.json")
+	legacy := []byte(
+		"{\n  \"version\": 3,\n  \"input_directory\": \"" + input +
+			"\",\n  \"output_directory\": \"" + legacyOutputDirectory +
+			"\",\n  \"chapter_interval\": \"23:40\"\n}\n",
+	)
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	defaults := Settings{
+		Version:         Version,
+		InputDirectory:  input,
+		OutputDirectory: newOutput,
+		ChapterInterval: "23:40",
+	}
+	got, err := (Store{Path: path}).LoadOrCreate(defaults)
+	if err != nil {
+		// The production legacy path is intentionally not created in this isolated test.
+		// The migration must replace it before directory validation.
+		t.Fatalf("LoadOrCreate() error = %v", err)
+	}
+	if got.OutputDirectory != newOutput || got.Version != Version {
+		t.Fatalf("migrated settings = %#v", got)
+	}
+
+	custom := Settings{
+		Version:         legacyVersionThree,
+		InputDirectory:  input,
+		OutputDirectory: oldOutput,
+		ChapterInterval: "23:40",
+	}
+	customPath := filepath.Join(root, "custom.json")
+	if err := os.WriteFile(
+		customPath,
+		[]byte("{\n  \"version\": 3,\n  \"input_directory\": \""+input+
+			"\",\n  \"output_directory\": \""+oldOutput+
+			"\",\n  \"chapter_interval\": \"23:40\"\n}\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	got, err = (Store{Path: customPath}).LoadOrCreate(defaults)
+	if err != nil {
+		t.Fatalf("LoadOrCreate(custom) error = %v", err)
+	}
+	custom.Version = Version
+	if got != custom {
+		t.Fatalf("custom migrated settings = %#v, want %#v", got, custom)
 	}
 }
 

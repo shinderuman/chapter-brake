@@ -165,3 +165,55 @@ func (q Queue) RemoveHead() (Queue, error) {
 	}
 	return next, nil
 }
+
+func (q Queue) RemoveJob(id string) (Queue, error) {
+	index := -1
+	for i, job := range q.Jobs {
+		if job.ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Queue{}, fmt.Errorf("queue job %q does not exist", id)
+	}
+
+	remaining := make([]Job, 0, len(q.Jobs)-1)
+	remaining = append(remaining, q.Jobs[:index]...)
+	remaining = append(remaining, q.Jobs[index+1:]...)
+	next := Queue{
+		Version: q.Version,
+		Jobs:    remaining,
+	}
+	if err := next.Validate(); err != nil {
+		return Queue{}, err
+	}
+	return next, nil
+}
+
+func (q Queue) MoveJob(id string, delta int) (Queue, error) {
+	if delta != -1 && delta != 1 {
+		return Queue{}, fmt.Errorf("queue move delta must be -1 or 1")
+	}
+	index := -1
+	for i, job := range q.Jobs {
+		if job.ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Queue{}, fmt.Errorf("queue job %q does not exist", id)
+	}
+	destination := index + delta
+	if destination < 0 || destination >= len(q.Jobs) {
+		return q, nil
+	}
+	jobs := append([]Job(nil), q.Jobs...)
+	jobs[index], jobs[destination] = jobs[destination], jobs[index]
+	next := Queue{Version: q.Version, Jobs: jobs}
+	if err := next.Validate(); err != nil {
+		return Queue{}, err
+	}
+	return next, nil
+}

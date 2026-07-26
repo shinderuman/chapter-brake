@@ -91,8 +91,9 @@ func TestApproximateStarts(t *testing.T) {
 	tests := []struct {
 		name     string
 		chapters []Chapter
+		total    time.Duration
 		interval time.Duration
-		want     []int
+		want     Approximation
 		errText  string
 	}{
 		{
@@ -104,34 +105,81 @@ func TestApproximateStarts(t *testing.T) {
 				24*minute+5*time.Second,
 				47*minute+50*time.Second,
 			),
+			total:    72 * minute,
 			interval: DefaultEpisodeInterval,
-			want:     []int{1, 3, 5},
+			want:     Approximation{Starts: []int{1, 3, 5}},
 		},
 		{
 			name:     "tie chooses earlier",
 			chapters: chaptersAt(0, 20*minute, 28*minute),
+			total:    60 * minute,
 			interval: 24 * minute,
-			want:     []int{1, 2, 3},
+			want:     Approximation{Starts: []int{1, 2, 3}},
 		},
 		{
 			name:     "single chapter",
 			chapters: chaptersAt(0),
+			total:    40 * minute,
 			interval: DefaultEpisodeInterval,
-			want:     []int{1},
+			want:     Approximation{Starts: []int{1}},
 		},
 		{
-			name:     "last chapter is selected when no close target remains",
+			name:     "last chapter remains attached to prior output",
 			chapters: chaptersAt(0, 5*minute),
+			total:    30 * minute,
 			interval: DefaultEpisodeInterval,
-			want:     []int{1, 2},
+			want:     Approximation{Starts: []int{1}, TailMerged: true},
 		},
-		{"no chapters", nil, DefaultEpisodeInterval, nil, "no chapters"},
-		{"invalid interval", chaptersAt(0), 0, nil, "positive"},
+		{
+			name:     "full final interval remains a separate output",
+			chapters: chaptersAt(0, 24*minute),
+			total:    48 * minute,
+			interval: DefaultEpisodeInterval,
+			want:     Approximation{Starts: []int{1, 2}},
+		},
+		{
+			name:     "seven second final chapter is merged",
+			chapters: chaptersAt(0, 23*time.Minute+40*time.Second),
+			total:    23*time.Minute + 47*time.Second,
+			interval: DefaultEpisodeInterval,
+			want:     Approximation{Starts: []int{1}, TailMerged: true},
+		},
+		{
+			name: "real title does not select chapter 21",
+			chapters: chaptersAt(
+				0,
+				113*time.Second,
+				203*time.Second,
+				812*time.Second,
+				1326*time.Second,
+				1416*time.Second,
+				1422*time.Second,
+				1520*time.Second,
+				1610*time.Second,
+				2191*time.Second,
+				2747*time.Second,
+				2837*time.Second,
+				2843*time.Second,
+				2939*time.Second,
+				3029*time.Second,
+				3784*time.Second,
+				4168*time.Second,
+				4258*time.Second,
+				4264*time.Second,
+				4357*time.Second,
+				4694*time.Second,
+			),
+			total:    5685 * time.Second,
+			interval: DefaultEpisodeInterval,
+			want:     Approximation{Starts: []int{1, 7, 13, 19}, TailMerged: true},
+		},
+		{name: "no chapters", interval: DefaultEpisodeInterval, errText: "no chapters"},
+		{name: "invalid interval", chapters: chaptersAt(0), total: time.Minute, errText: "positive"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ApproximateStarts(tt.chapters, tt.interval)
+			got, err := ApproximateStarts(tt.chapters, tt.total, tt.interval)
 			if tt.errText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.errText) {
 					t.Fatalf("ApproximateStarts() error = %v, want containing %q", err, tt.errText)
@@ -194,6 +242,26 @@ func TestParseAndFormatChapterInterval(t *testing.T) {
 	}
 }
 
+func TestChapterAndOutputDurations(t *testing.T) {
+	chapters := chaptersAt(0, 10*time.Second, 25*time.Second, 40*time.Second)
+	total := 47 * time.Second
+	chapterDurations, err := ChapterDurations(chapters, total)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []time.Duration{10 * time.Second, 15 * time.Second, 15 * time.Second, 7 * time.Second}; !reflect.DeepEqual(chapterDurations, want) {
+		t.Fatalf("ChapterDurations() = %v, want %v", chapterDurations, want)
+	}
+	outputDurations, available, err := OutputDurations(chapters, total, []int{1, 3}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outputDurations[0] != 25*time.Second || outputDurations[2] != 22*time.Second ||
+		!available[0] || !available[2] {
+		t.Fatalf("OutputDurations() = %v, %v", outputDurations, available)
+	}
+}
+
 func TestValidateChapters(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -247,5 +315,28 @@ func TestChapterRangeApproximateDuration(t *testing.T) {
 	}
 	if _, err := (ChapterRange{Start: 0, End: 1}).ApproximateDuration(chapters, 10*time.Minute); err == nil {
 		t.Fatal("ApproximateDuration(invalid) error = nil")
+	}
+}
+
+func TestShortFinalChapter(t *testing.T) {
+	chapters := chaptersAt(0, 10*time.Second, 20*time.Second)
+	duration, err := FinalChapterDuration(chapters, 21*time.Second)
+	if err != nil || duration != time.Second {
+		t.Fatalf("FinalChapterDuration() = %s, %v", duration, err)
+	}
+	short, err := HasShortFinalChapter(chapters, 22*time.Second)
+	if err != nil || !short {
+		t.Fatalf("HasShortFinalChapter(2s) = %t, %v", short, err)
+	}
+	short, err = HasShortFinalChapter(chapters, 22*time.Second+time.Millisecond)
+	if err != nil || short {
+		t.Fatalf("HasShortFinalChapter(over 2s) = %t, %v", short, err)
+	}
+	short, err = HasShortFinalChapter(chapters[:1], time.Second)
+	if err != nil || short {
+		t.Fatalf("HasShortFinalChapter(single) = %t, %v", short, err)
+	}
+	if _, err := FinalChapterDuration(chapters, 19*time.Second); err == nil {
+		t.Fatal("FinalChapterDuration(before final start) error = nil")
 	}
 }

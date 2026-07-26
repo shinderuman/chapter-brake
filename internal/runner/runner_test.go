@@ -22,19 +22,55 @@ type memoryStore struct {
 	q       queue.Queue
 	saves   []queue.Queue
 	saveErr error
+	active  string
 }
 
-func (s *memoryStore) Load() (queue.Queue, error) {
-	return s.q, nil
+func (s *memoryStore) ClaimHead() (queue.Job, bool, error) {
+	if s.active != "" {
+		return queue.Job{}, false, errors.New("job already active")
+	}
+	head, ok := s.q.Peek()
+	if ok {
+		s.active = head.ID
+	}
+	return head, ok, nil
 }
 
-func (s *memoryStore) Save(q queue.Queue) error {
+func (s *memoryStore) ReleaseHead(id string) error {
+	if s.active != id {
+		return errors.New("active job changed")
+	}
+	s.active = ""
+	return nil
+}
+
+func (s *memoryStore) CompleteHead(id string) error {
 	if s.saveErr != nil {
 		return s.saveErr
 	}
-	s.q = q
-	s.saves = append(s.saves, q)
+	head, ok := s.q.Peek()
+	if !ok || head.ID != id {
+		return errors.New("queue head changed")
+	}
+	if s.active != id {
+		return errors.New("job is not active")
+	}
+	next, err := s.q.RemoveHead()
+	if err != nil {
+		return err
+	}
+	s.q = next
+	s.active = ""
+	s.saves = append(s.saves, next)
 	return nil
+}
+
+func (s *memoryStore) AppendJobs(jobs ...queue.Job) error {
+	next, err := s.q.Append(jobs...)
+	if err == nil {
+		s.q = next
+	}
+	return err
 }
 
 type fakeScanner struct {
@@ -265,6 +301,27 @@ func TestRunnerMKVSuccessRemovesHeadOnlyAfterPublish(t *testing.T) {
 	}
 }
 
+func TestRunnerPausesAfterCurrentJob(t *testing.T) {
+	job := testJob(t, queue.ContainerMKV)
+	second := job
+	second.ID = "job-2"
+	second.Output = filepath.Join(filepath.Dir(job.Output), "second_02.mkv")
+	runner, store, _, _ := newTestRunner(t, job)
+	store.q.Jobs = append(store.q.Jobs, second)
+	runner.PauseRequested = func() bool { return true }
+
+	result, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Completed != 1 || !result.Paused {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(store.q.Jobs) != 1 || store.q.Jobs[0].ID != second.ID {
+		t.Fatalf("queue after pause = %#v", store.q)
+	}
+}
+
 func TestRunnerMP4SuccessUsesStreamCopy(t *testing.T) {
 	job := testJob(t, queue.ContainerMP4)
 	runner, store, executor, _ := newTestRunner(t, job)
@@ -379,6 +436,9 @@ func TestRunnerQueueSaveFailureLeavesPublishedFileAndHead(t *testing.T) {
 	if result.Completed != 0 || len(store.q.Jobs) != 1 {
 		t.Fatalf("result = %#v, queue = %#v", result, store.q)
 	}
+	if store.active != "" {
+		t.Fatalf("active job remains after save failure: %q", store.active)
+	}
 	if _, statErr := os.Stat(job.Output); statErr != nil {
 		t.Fatalf("published output missing after queue save failure: %v", statErr)
 	}
@@ -457,5 +517,42 @@ func TestRunnerInvocationOrder(t *testing.T) {
 	}
 	if len(stages) == 0 || stages[0] != "validate" || stages[len(stages)-1] != "publish" {
 		t.Fatalf("stages = %v", stages)
+	}
+}
+
+func TestRunnerProcessesJobAppendedDuringExecution(t *testing.T) {
+	first := testJob(t, queue.ContainerMKV)
+	runner, store, _, _ := newTestRunner(t, first)
+	second := first
+	second.ID = "job-2"
+	secondDirectory := filepath.Join(filepath.Dir(first.Output), "second")
+	if err := os.Mkdir(secondDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	second.Output = filepath.Join(secondDirectory, filepath.Base(first.Output))
+
+	appended := false
+	runner.Stage = func(jobID, stage string) {
+		if jobID == first.ID && stage == "publish" && !appended {
+			appended = true
+			if err := store.AppendJobs(second); err != nil {
+				t.Errorf("AppendJobs() error = %v", err)
+			}
+		}
+	}
+	var completed []string
+	runner.Completed = func(id string) {
+		completed = append(completed, id)
+	}
+
+	result, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Completed != 2 || len(store.q.Jobs) != 0 {
+		t.Fatalf("result = %#v, queue = %#v", result, store.q)
+	}
+	if !reflect.DeepEqual(completed, []string{first.ID, second.ID}) {
+		t.Fatalf("completed = %v", completed)
 	}
 }

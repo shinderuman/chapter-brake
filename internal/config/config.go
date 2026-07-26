@@ -11,12 +11,14 @@ import (
 )
 
 const (
-	Version                = 3
+	Version                = 4
 	legacyVersionOne       = 1
 	legacyVersionTwo       = 2
+	legacyVersionThree     = 3
 	DefaultInputDirectory  = "/Volumes/2TB HDD/Images"
-	DefaultOutputDirectory = "/Volumes/2TB HDD/mp4/"
+	DefaultOutputDirectory = "/Volumes/2TB HDD/Movies"
 	DefaultChapterInterval = "23:40"
+	legacyOutputDirectory  = "/Volumes/2TB HDD/mp4/"
 )
 
 type Settings struct {
@@ -132,6 +134,12 @@ func (s Store) LoadOrCreate(defaults Settings) (Settings, error) {
 		case settings.Version == legacyVersionTwo && settings.ChapterInterval == "":
 			settings.Version = Version
 			settings.ChapterInterval = defaults.ChapterInterval
+			migrated = true
+		case settings.Version == legacyVersionThree:
+			settings.Version = Version
+			if filepath.Clean(settings.OutputDirectory) == filepath.Clean(legacyOutputDirectory) {
+				settings.OutputDirectory = defaults.OutputDirectory
+			}
 			migrated = true
 		}
 		if migrated {
