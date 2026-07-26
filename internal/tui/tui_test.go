@@ -180,11 +180,18 @@ func TestListNavigation(t *testing.T) {
 
 func TestFormNavigation(t *testing.T) {
 	backCalls := 0
+	escapeCalls := 0
+	nextCalls := 0
 	form := tview.NewForm().
 		AddInputField("name", "source", 20, nil, nil).
 		AddCheckbox("selected", false, nil).
 		AddButton("next", nil)
-	capture := formNavigation(form, func() { backCalls++ })
+	capture := formNavigation(
+		form,
+		func() { backCalls++ },
+		func() { escapeCalls++ },
+		func() { nextCalls++ },
+	)
 	var focus func(tview.Primitive)
 	focus = func(primitive tview.Primitive) {
 		primitive.Focus(focus)
@@ -204,18 +211,25 @@ func TestFormNavigation(t *testing.T) {
 	if event := capture(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone)); event.Key() != tcell.KeyBacktab {
 		t.Fatalf("input up mapped to %v, want Backtab", event.Key())
 	}
-	if event := capture(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone)); event != nil || backCalls != 1 {
-		t.Fatalf("input escape result = %v, back calls = %d", event, backCalls)
+	if event := capture(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone)); event != nil || escapeCalls != 1 {
+		t.Fatalf("input escape result = %v, escape calls = %d", event, escapeCalls)
 	}
 
 	form.SetFocus(1)
+	checkbox := form.GetFormItem(1).(*tview.Checkbox)
 	for _, key := range []tcell.Key{tcell.KeyLeft, tcell.KeyRight} {
 		event := capture(tcell.NewEventKey(key, 0, tcell.ModNone))
 		if event.Key() != tcell.KeyRune || event.Rune() != ' ' {
 			t.Fatalf("checkbox key %v mapped to key=%v rune=%q", key, event.Key(), event.Rune())
 		}
 	}
-	if event := capture(tcell.NewEventKey(tcell.KeyBackspace2, 0, tcell.ModNone)); event != nil || backCalls != 2 {
+	if event := capture(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil || nextCalls != 1 {
+		t.Fatalf("checkbox enter result = %v, next calls = %d", event, nextCalls)
+	}
+	if checkbox.IsChecked() {
+		t.Fatal("checkbox changed when Enter was pressed")
+	}
+	if event := capture(tcell.NewEventKey(tcell.KeyBackspace2, 0, tcell.ModNone)); event != nil || backCalls != 1 {
 		t.Fatalf("checkbox backspace result = %v, back calls = %d", event, backCalls)
 	}
 
@@ -225,6 +239,42 @@ func TestFormNavigation(t *testing.T) {
 	}
 	if event := capture(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); event.Key() != tcell.KeyTab {
 		t.Fatalf("button right mapped to %v, want Tab", event.Key())
+	}
+}
+
+func TestEscapeReturnsActiveAddWorkflowToMain(t *testing.T) {
+	store := &uiStore{q: queue.Empty()}
+	service := &app.Service{
+		QueueStore:      store,
+		Scanner:         uiScanner{},
+		Presets:         uiCatalog{},
+		OutputDirectory: t.TempDir(),
+	}
+	ui, err := New(service, &runner.Runner{Store: store}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ui.startAdd()
+	assertFrontPage(t, ui, "files")
+	addID := ui.addID
+	if !ui.addActive(addID) {
+		t.Fatal("add workflow is not active")
+	}
+	if event := ui.captureGlobalInput(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone)); event != nil {
+		t.Fatalf("escape result = %v", event)
+	}
+	assertFrontPage(t, ui, "main")
+	if ui.addActive(addID) {
+		t.Fatal("add workflow remains active after Escape")
+	}
+
+	ui.startAdd()
+	if ui.addID == addID {
+		t.Fatal("new add workflow reused stale ID")
+	}
+	if ui.addActive(addID) {
+		t.Fatal("stale add workflow became active")
 	}
 }
 

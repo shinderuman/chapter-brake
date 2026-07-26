@@ -28,6 +28,8 @@ type UI struct {
 
 	draft   app.Draft
 	preview app.Preview
+	adding  bool
+	addID   uint64
 
 	mu              sync.Mutex
 	running         bool
@@ -90,21 +92,26 @@ func (u *UI) Pages() *tview.Pages {
 }
 
 func (u *UI) showMain() {
+	u.adding = false
 	q, err := u.service.Queue()
 	waiting := 0
 	if err == nil {
 		waiting = len(q.Jobs)
 	}
 	list := tview.NewList().
-		AddItem("新しいジョブを追加", "", 'a', func() {
-			u.showFiles(u.initialDir)
-		}).
+		AddItem("新しいジョブを追加", "", 'a', u.startAdd).
 		AddItem("キューを表示", "", 'q', u.showQueue).
 		AddItem("キューを実行", "", 'r', u.startQueue).
 		AddItem("終了", "", 'x', u.terminal.Stop)
 	list.SetTitle(fmt.Sprintf(" ChapterBrake — 待機中: %d件 — ↑↓:移動 →/Enter:決定 ", waiting)).SetBorder(true)
 	list.SetInputCapture(listNavigation(nil, nil))
 	u.switchPage("main", list)
+}
+
+func (u *UI) startAdd() {
+	u.addID++
+	u.adding = true
+	u.showFiles(u.initialDir)
 }
 
 func (u *UI) showFiles(directory string) {
@@ -149,10 +156,14 @@ func (u *UI) showFiles(directory string) {
 }
 
 func (u *UI) analyze(input string) {
+	addID := u.addID
 	u.showBusy("入力を解析中…")
 	go func() {
 		draft, err := u.service.Analyze(context.Background(), input)
 		u.terminal.QueueUpdateDraw(func() {
+			if !u.addActive(addID) {
+				return
+			}
 			if err != nil {
 				u.showError("入力解析", err, func() { u.showFiles(filepath.Dir(input)) })
 				return
@@ -165,7 +176,7 @@ func (u *UI) analyze(input string) {
 
 func (u *UI) showPreset() {
 	list := tview.NewList()
-	list.SetTitle(" プリセット — My Presets相当 — ↑↓:移動 →/Enter:決定 ←/BS/Esc:戻る ").SetBorder(true)
+	list.SetTitle(" プリセット — My Presets相当 — ↑↓:移動 →/Enter:決定 ←/BS:戻る Esc:トップ ").SetBorder(true)
 	for _, preset := range u.service.Presets.Curated() {
 		preset := preset
 		list.AddItem(preset.DisplayName, preset.Summary, 0, func() {
@@ -174,15 +185,19 @@ func (u *UI) showPreset() {
 	}
 	list.AddItem("その他のプリセットから選ぶ", "HandBrake標準プリセット", 0, u.loadStandardPresets)
 	back := func() { u.showFiles(filepath.Dir(u.draft.Input)) }
-	list.SetInputCapture(listNavigation(back, back))
+	list.SetInputCapture(listNavigation(back, u.showMain))
 	u.switchPage("preset", list)
 }
 
 func (u *UI) loadStandardPresets() {
+	addID := u.addID
 	u.showBusy("HandBrake標準プリセットを取得中…")
 	go func() {
 		presets, err := u.service.Presets.ListStandard(context.Background(), nil, nil)
 		u.terminal.QueueUpdateDraw(func() {
+			if !u.addActive(addID) {
+				return
+			}
 			if err != nil {
 				u.showError("プリセット一覧", err, u.showPreset)
 				return
@@ -194,22 +209,26 @@ func (u *UI) loadStandardPresets() {
 
 func (u *UI) showStandardPresets(presets []handbrake.StandardPreset) {
 	list := tview.NewList()
-	list.SetTitle(" その他のプリセット — ↑↓:移動 →/Enter:決定 ←/BS/Esc:戻る ").SetBorder(true)
+	list.SetTitle(" その他のプリセット — ↑↓:移動 →/Enter:決定 ←/BS:戻る Esc:トップ ").SetBorder(true)
 	for _, preset := range presets {
 		preset := preset
 		list.AddItem(preset.Name, preset.Category, 0, func() {
 			u.resolveStandardPreset(preset.Name)
 		})
 	}
-	list.SetInputCapture(listNavigation(u.showPreset, u.showPreset))
+	list.SetInputCapture(listNavigation(u.showPreset, u.showMain))
 	u.switchPage("standard-presets", list)
 }
 
 func (u *UI) resolveStandardPreset(name string) {
+	addID := u.addID
 	u.showBusy("プリセットを確認中…")
 	go func() {
 		preset, err := u.service.Presets.Resolve(context.Background(), name, nil, nil)
 		u.terminal.QueueUpdateDraw(func() {
+			if !u.addActive(addID) {
+				return
+			}
 			if err != nil {
 				u.showError("プリセット", err, u.showPreset)
 				return
@@ -254,8 +273,8 @@ func (u *UI) showNaming() {
 			u.showChapters()
 		}).
 		AddButton("戻る", u.showPreset)
-	form.SetTitle(" 出力名 — ↑↓/Tab:移動 ←→:カーソル BS:削除 Esc:戻る ").SetBorder(true)
-	form.SetInputCapture(formNavigation(form, u.showPreset))
+	form.SetTitle(" 出力名 — ↑↓/Tab:移動 ←→:カーソル BS:削除 Esc:トップ ").SetBorder(true)
+	form.SetInputCapture(formNavigation(form, u.showPreset, u.showMain, nil))
 	u.switchPage("naming", form)
 }
 
@@ -285,7 +304,7 @@ func (u *UI) showChapters() {
 		if u.draft.AutoChapters {
 			mode = "23分40秒近似: 有効"
 		}
-		form.SetTitle(" チャプター開始位置 — " + mode + " — ↑↓:移動 ←→/Space:切替 BS/Esc:戻る ")
+		form.SetTitle(" チャプター開始位置 — " + mode + " — ↑↓:移動 ←→/Space:切替 Enter:次 Esc:トップ ")
 		elapsed, available := elapsedForDisplay(u.draft.Media.Chapters, sortedKeys(selected))
 		for i, chapter := range u.draft.Media.Chapters {
 			relative := "-"
@@ -302,6 +321,13 @@ func (u *UI) showChapters() {
 		}
 	}
 	refresh()
+	next := func() {
+		if len(u.draft.SelectedChapters) == 0 {
+			u.showError("チャプター", fmt.Errorf("少なくとも1件を選択してください"), u.showChapters)
+			return
+		}
+		u.showAudio()
+	}
 	form.
 		AddButton("23分40秒近似値にチェック", func() {
 			starts, err := media.ApproximateStarts(u.draft.Media.Chapters, media.DefaultEpisodeInterval)
@@ -318,16 +344,10 @@ func (u *UI) showChapters() {
 			u.draft.AutoChapters = false
 			u.showChapters()
 		}).
-		AddButton("次へ", func() {
-			if len(u.draft.SelectedChapters) == 0 {
-				u.showError("チャプター", fmt.Errorf("少なくとも1件を選択してください"), u.showChapters)
-				return
-			}
-			u.showAudio()
-		}).
+		AddButton("次へ", next).
 		AddButton("戻る", u.showNaming)
 	form.SetBorder(true)
-	form.SetInputCapture(formNavigation(form, u.showNaming))
+	form.SetInputCapture(formNavigation(form, u.showNaming, u.showMain, next))
 	u.switchPage("chapters", form)
 }
 
@@ -351,7 +371,7 @@ func (u *UI) showAudio() {
 		})
 	}
 	form.AddTextView("", "各選択トラックから: 高品質 + 標準品質（数値入力なし）", 70, 2, false, false)
-	form.AddButton("次へ", func() {
+	next := func() {
 		if len(u.draft.AudioTracks) == 0 {
 			u.showError("音声", fmt.Errorf("少なくとも1トラックを選択してください"), u.showAudio)
 			return
@@ -362,10 +382,11 @@ func (u *UI) showAudio() {
 			return
 		}
 		u.showSubtitles()
-	})
+	}
+	form.AddButton("次へ", next)
 	form.AddButton("戻る", u.showChapters)
-	form.SetTitle(" 音声トラック — ↑↓:移動 ←→/Space:切替 BS/Esc:戻る ").SetBorder(true)
-	form.SetInputCapture(formNavigation(form, u.showChapters))
+	form.SetTitle(" 音声トラック — ↑↓:移動 ←→/Space:切替 Enter:次 Esc:トップ ").SetBorder(true)
+	form.SetInputCapture(formNavigation(form, u.showChapters, u.showMain, next))
 	u.switchPage("audio", form)
 }
 
@@ -415,10 +436,11 @@ func (u *UI) showSubtitles() {
 		form.AddFormItem(box)
 	}
 	form.AddTextView("", "焼き付け: 無効", 40, 1, false, false)
-	form.AddButton("次へ", u.showPreview)
+	next := u.showPreview
+	form.AddButton("次へ", next)
 	form.AddButton("戻る", u.showAudio)
-	form.SetTitle(" 字幕 — ↑↓:移動 ←→/Space:切替 BS/Esc:戻る ").SetBorder(true)
-	form.SetInputCapture(formNavigation(form, u.showAudio))
+	form.SetTitle(" 字幕 — ↑↓:移動 ←→/Space:切替 Enter:次 Esc:トップ ").SetBorder(true)
+	form.SetInputCapture(formNavigation(form, u.showAudio, u.showMain, next))
 	u.switchPage("subtitles", form)
 }
 
@@ -479,7 +501,7 @@ func (u *UI) showPreview() {
 		}
 	}
 	form.AddButton("戻る", back)
-	form.SetInputCapture(formNavigation(form, back))
+	form.SetInputCapture(formNavigation(form, back, u.showMain, nil))
 	layout := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(body, 0, 1, false).
 		AddItem(form, 3, 0, true)
@@ -600,6 +622,10 @@ func (u *UI) startQueue() {
 }
 
 func (u *UI) captureGlobalInput(event *tcell.EventKey) *tcell.EventKey {
+	if event.Key() == tcell.KeyEsc && u.adding {
+		u.showMain()
+		return nil
+	}
 	if event.Key() != tcell.KeyCtrlC {
 		return event
 	}
@@ -613,6 +639,10 @@ func (u *UI) captureGlobalInput(event *tcell.EventKey) *tcell.EventKey {
 	}
 	u.terminal.Stop()
 	return nil
+}
+
+func (u *UI) addActive(addID uint64) bool {
+	return u.adding && u.addID == addID
 }
 
 func (u *UI) showBusy(message string) {
@@ -675,7 +705,12 @@ func listNavigation(back, escape func()) func(*tcell.EventKey) *tcell.EventKey {
 	}
 }
 
-func formNavigation(form *tview.Form, back func()) func(*tcell.EventKey) *tcell.EventKey {
+func formNavigation(
+	form *tview.Form,
+	back func(),
+	escape func(),
+	next func(),
+) func(*tcell.EventKey) *tcell.EventKey {
 	return func(event *tcell.EventKey) *tcell.EventKey {
 		itemIndex, _ := form.GetFocusedItemIndex()
 		var item tview.FormItem
@@ -686,7 +721,7 @@ func formNavigation(form *tview.Form, back func()) func(*tcell.EventKey) *tcell.
 		_, isCheckbox := item.(*tview.Checkbox)
 
 		if event.Key() == tcell.KeyEsc {
-			back()
+			escape()
 			return nil
 		}
 		if isInput {
@@ -697,6 +732,12 @@ func formNavigation(form *tview.Form, back func()) func(*tcell.EventKey) *tcell.
 				return tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
 			}
 			return event
+		}
+		if isCheckbox && event.Key() == tcell.KeyEnter {
+			if next != nil {
+				next()
+			}
+			return nil
 		}
 
 		switch event.Key() {
