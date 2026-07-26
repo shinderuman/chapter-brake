@@ -22,3 +22,4 @@ coverage.out
 /poc/logs/
 /poc/*.mkv
 /poc/*.mp4
+/poc/tui-spike/tui-spike

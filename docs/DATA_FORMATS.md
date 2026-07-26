@@ -48,16 +48,7 @@
       "container": "mkv",
       "chapter_start": 1,
       "chapter_end": 5,
-      "audio": [
-        {
-          "source_track": 1,
-          "bitrate_kbps": 640
-        },
-        {
-          "source_track": 2,
-          "bitrate_kbps": 160
-        }
-      ],
+      "audio_tracks": [1, 2],
       "subtitles": [1]
     }
   ]
@@ -73,7 +64,10 @@
 - `input`と`output`は絶対パス。
 - `container`は`mp4`または`mkv`。
 - `chapter_start`と`chapter_end`は1以上で、開始<=終了。
-- `audio`は選択された入力音声トラックとビットレート。初期版はトラック1・2だけを許可する。
+- `audio_tracks`は選択された入力音声トラック番号。1または2だけを重複なしで
+  1件以上許可する。
+- 各入力トラックから作る高品質・標準品質の具体設定はChapterBrakeの
+  バージョン付き音声方針から決定し、映像`preset`の音声ルールには依存しない。
 - `subtitles`は入力字幕トラック番号。MP4では空配列でなければならない。
 - 字幕焼き付けを表すフィールドは作らない。焼き付けは常に無効という不変条件にする。
 - タイトルメタデータ用フィールドは作らない。値は常に`output`のファイル名から拡張子を除いて導出する。

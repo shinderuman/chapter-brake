@@ -63,15 +63,21 @@ source-a.mkv
 
 ## 4. プリセット選択
 
-利用可能なプリセットを一列で表示する。検索や階層折り畳みは不要。
+最初にChapterBrake内蔵の`My Presets相当`だけを一列で表示する。
+HandBrake GUIやGUI設定ファイルは参照しない。検索や階層折り畳みは不要。
 
 ```text
-> My H.265 MP4
-  My H.265 MKV
-  HQ 1080p30 Surround
+> 1080p MP4
+  1080p MKV
+  480p MP4
+  その他のプリセットから選ぶ
 ```
 
-コンテナ形式が判定できない、またはMP4/MKV以外のプリセットは選択時に明確なエラーとする。
+「その他のプリセットから選ぶ」を決定した場合だけHandBrake標準プリセットの
+一覧へ移動する。標準プリセット一覧では`Esc`で`My Presets`一覧へ戻る。
+
+コンテナ形式が判定できない、またはMP4/MKV以外のプリセットは選択時に
+明確なエラーとする。
 
 ## 5. 出力名
 
@@ -110,12 +116,17 @@ source-a.mkv
 ```text
 音声トラック
 
-[x] 1  Japanese  AC3  5.1ch   640 kbps
-[x] 2  Japanese  AAC  Stereo  160 kbps
+[x] 1  Japanese  AC3  5.1ch
+[x] 2  Japanese  AAC  Stereo
 [-] 3  Commentary AAC Stereo  初期版では未対応
+
+各選択トラックの出力:
+  高品質    AC3 Passthru 5.1ch
+  標準品質  AAC Stereo
 ```
 
-トラック1・2について、使用チェックとビットレートを編集できる。少なくとも一つの音声を必須とするか、音声なしを許可するかはMilestone 0でHandBrakeCLI挙動を確認し、要求に反しない最小仕様を`DECISIONS.md`へ記録する。
+トラック1・2について使用チェックだけを変更できる。ビットレート入力は設けない。
+少なくとも一つの入力音声トラックを必須とする。
 
 ## 8. 字幕設定
 
@@ -148,7 +159,8 @@ source-a_07.mkv  chapter 6-13   約23:42
 source-a_08.mkv  chapter 14-17  約23:38
 source-a_09.mkv  chapter 18-24  約24:01
 
-音声: 1=640 kbps, 2=160 kbps
+入力音声: 1, 2
+各入力から: 高品質 AC3 Passthru + 標準品質 AAC Stereo
 字幕: 1
 焼き付け: 無効
 タイトル: 各出力ファイル名のstem
