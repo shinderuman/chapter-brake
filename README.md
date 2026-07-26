@@ -161,3 +161,7 @@ go test ./internal/runner -run TestRealToolchainIntegration -v -count=1
 PoC固有のスクリプトとfixtureは`poc/`の独立Goモジュールへ隔離され、製品の
 ビルド・通常テスト・実行時依存には含まれません。成立根拠は
 `docs/POC_RESULT.md`と`docs/LOCAL_INVESTIGATION.md`にあります。
+
+## ライセンス
+
+MIT Licenseです。詳細は[LICENSE](LICENSE)を参照してください。

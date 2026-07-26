@@ -1,11 +1,19 @@
-# Build outputs
+# Go build and test outputs
 /chapter-brake
 /bin/
-/dist/
-
-# Test and coverage
 *.test
 coverage.out
+
+# ChapterBrake job temporary files
+**/.chapterbrake-*
+
+# PoC generated artifacts
+/poc/artifacts/
+/poc/logs/
+/poc/tui-spike/tui-spike
+
+# Local scratch data
+/tmp/
 
 # macOS
 .DS_Store
@@ -13,13 +21,3 @@ coverage.out
 # IDE
 .vscode/
 .idea/
-
-# Local investigation artifacts
-/tmp/
-
-# PoC generated media and logs
-/poc/artifacts/
-/poc/logs/
-/poc/*.mkv
-/poc/*.mp4
-/poc/tui-spike/tui-spike
