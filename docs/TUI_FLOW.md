@@ -34,8 +34,9 @@ ChapterBrake
 
 ## 2. ファイル選択
 
-通常起動では`settings.json`の`input_directory`から開始する。`--cwd`付きでは、
-設定を変更せず、その一回だけ起動時のカレントディレクトリから開始する。
+通常起動では`settings.json`の`input_directory`から開始する。
+`--directory PATH`または`-d PATH`付きでは、設定を変更せず、その一回だけ
+指定ディレクトリから開始する。カレントディレクトリを指定する場合は`-d .`とする。
 
 ```text
 入力MKVを選択

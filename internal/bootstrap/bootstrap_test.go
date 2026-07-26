@@ -49,8 +49,8 @@ func TestRunBuildsApplication(t *testing.T) {
 	var gotService *app.Service
 	var gotRunner *runner.Runner
 	var gotInitialDirectory string
-	deps.workingDirectory = func() (string, error) {
-		t.Fatal("working directory was requested without --cwd")
+	deps.absolutePath = func(string) (string, error) {
+		t.Fatal("absolute path was requested without a directory option")
 		return "", nil
 	}
 	deps.newTerminal = func(
@@ -91,11 +91,13 @@ func TestRunBuildsApplication(t *testing.T) {
 	}
 }
 
-func TestRunUsesWorkingDirectoryOption(t *testing.T) {
+func TestRunUsesInputDirectoryOption(t *testing.T) {
 	deps, dataDirectory, inputDirectory, _ := testDependencies(t)
-	workingDirectory := t.TempDir()
-	deps.workingDirectory = func() (string, error) {
-		return workingDirectory, nil
+	overrideDirectory := t.TempDir()
+	var gotPathArgument string
+	deps.absolutePath = func(path string) (string, error) {
+		gotPathArgument = path
+		return overrideDirectory, nil
 	}
 	settingsPath := filepath.Join(dataDirectory, "settings.json")
 	settingsBefore, err := os.ReadFile(settingsPath)
@@ -112,31 +114,68 @@ func TestRunUsesWorkingDirectoryOption(t *testing.T) {
 		return &fakeTerminal{}, nil
 	}
 
-	if err := run(context.Background(), deps, runOptions{useWorkingDirectory: true}); err != nil {
+	if err := run(context.Background(), deps, runOptions{inputDirectory: "."}); err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
-	if gotInitialDirectory != workingDirectory {
-		t.Fatalf("initial directory = %q, want cwd %q; settings was %q",
-			gotInitialDirectory, workingDirectory, inputDirectory)
+	if gotPathArgument != "." {
+		t.Fatalf("absolute path argument = %q, want %q", gotPathArgument, ".")
+	}
+	if gotInitialDirectory != overrideDirectory {
+		t.Fatalf("initial directory = %q, want override %q; settings was %q",
+			gotInitialDirectory, overrideDirectory, inputDirectory)
 	}
 	settingsAfter, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(settingsAfter) != string(settingsBefore) {
-		t.Fatal("--cwd changed settings.json")
+		t.Fatal("directory option changed settings.json")
+	}
+}
+
+func TestRunRejectsInvalidInputDirectoryOption(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "input.mkv")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		path    string
+		errText string
+	}{
+		{name: "missing", path: filepath.Join(root, "missing"), errText: "stat input directory"},
+		{name: "file", path: file, errText: "input path is not a directory"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps, _, _, _ := testDependencies(t)
+			deps.absolutePath = func(string) (string, error) {
+				return tt.path, nil
+			}
+			err := run(context.Background(), deps, runOptions{inputDirectory: "provided"})
+			if err == nil || !strings.Contains(err.Error(), tt.errText) {
+				t.Fatalf("run() error = %v, want containing %q", err, tt.errText)
+			}
+		})
 	}
 }
 
 func TestParseOptions(t *testing.T) {
 	tests := []struct {
-		name    string
-		args    []string
-		wantCWD bool
-		wantErr bool
+		name          string
+		args          []string
+		wantDirectory string
+		wantErr       bool
 	}{
 		{name: "default"},
-		{name: "cwd", args: []string{"--cwd"}, wantCWD: true},
+		{name: "long", args: []string{"--directory", "/input"}, wantDirectory: "/input"},
+		{name: "short", args: []string{"-d", "."}, wantDirectory: "."},
+		{name: "long equals", args: []string{"--directory=relative"}, wantDirectory: "relative"},
+		{name: "missing value", args: []string{"--directory"}, wantErr: true},
+		{name: "empty value", args: []string{"--directory="}, wantErr: true},
+		{name: "removed cwd option", args: []string{"--cwd"}, wantErr: true},
 		{name: "unknown", args: []string{"--unknown"}, wantErr: true},
 		{name: "positional", args: []string{"input.mkv"}, wantErr: true},
 	}
@@ -146,8 +185,8 @@ func TestParseOptions(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseOptions() error = %v, wantErr %t", err, tt.wantErr)
 			}
-			if got.useWorkingDirectory != tt.wantCWD {
-				t.Fatalf("useWorkingDirectory = %t, want %t", got.useWorkingDirectory, tt.wantCWD)
+			if got.inputDirectory != tt.wantDirectory {
+				t.Fatalf("inputDirectory = %q, want %q", got.inputDirectory, tt.wantDirectory)
 			}
 		})
 	}
@@ -202,15 +241,15 @@ func TestRunReportsStartupAndTerminalErrors(t *testing.T) {
 	}
 
 	deps, _, _, _ = testDependencies(t)
-	deps.workingDirectory = func() (string, error) {
+	deps.absolutePath = func(string) (string, error) {
 		return "", expected
 	}
 	if err := run(
 		context.Background(),
 		deps,
-		runOptions{useWorkingDirectory: true},
-	); !errors.Is(err, expected) || !strings.Contains(err.Error(), "current directory") {
-		t.Fatalf("working directory error = %v", err)
+		runOptions{inputDirectory: "."},
+	); !errors.Is(err, expected) || !strings.Contains(err.Error(), "input directory") {
+		t.Fatalf("input directory resolution error = %v", err)
 	}
 }
 
@@ -236,8 +275,8 @@ func testDependencies(t *testing.T) (dependencies, string, string, string) {
 		homeDirectory: func() (string, error) {
 			return home, nil
 		},
-		workingDirectory: func() (string, error) {
-			return outputDirectory, nil
+		absolutePath: func(path string) (string, error) {
+			return filepath.Abs(path)
 		},
 		now: func() time.Time {
 			return time.Date(2026, 7, 26, 10, 0, 0, 0, time.Local)

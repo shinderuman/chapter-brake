@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -28,16 +29,16 @@ type terminal interface {
 }
 
 type dependencies struct {
-	homeDirectory    func() (string, error)
-	workingDirectory func() (string, error)
-	now              func() time.Time
-	executor         process.Executor
-	inspectTools     func(context.Context, process.Executor) ([]app.ToolInfo, error)
-	newTerminal      func(*app.Service, *runner.Runner, string) (terminal, error)
+	homeDirectory func() (string, error)
+	absolutePath  func(string) (string, error)
+	now           func() time.Time
+	executor      process.Executor
+	inspectTools  func(context.Context, process.Executor) ([]app.ToolInfo, error)
+	newTerminal   func(*app.Service, *runner.Runner, string) (terminal, error)
 }
 
 type runOptions struct {
-	useWorkingDirectory bool
+	inputDirectory string
 }
 
 // Run initializes and runs ChapterBrake until the user exits or macOS asks it
@@ -55,28 +56,34 @@ func Run(args []string) error {
 func parseOptions(args []string) (runOptions, error) {
 	flags := flag.NewFlagSet("chapterbrake", flag.ContinueOnError)
 	var parsed runOptions
-	flags.BoolVar(
-		&parsed.useWorkingDirectory,
-		"cwd",
-		false,
-		"use the current working directory instead of settings.json input_directory",
-	)
+	const directoryUsage = "start input file selection in this directory"
+	flags.StringVar(&parsed.inputDirectory, "directory", "", directoryUsage)
+	flags.StringVar(&parsed.inputDirectory, "d", "", directoryUsage+" (shorthand)")
 	if err := flags.Parse(args); err != nil {
 		return runOptions{}, err
 	}
 	if flags.NArg() != 0 {
 		return runOptions{}, fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
+	directorySpecified := false
+	flags.Visit(func(current *flag.Flag) {
+		if current.Name == "directory" || current.Name == "d" {
+			directorySpecified = true
+		}
+	})
+	if directorySpecified && parsed.inputDirectory == "" {
+		return runOptions{}, errors.New("directory option must not be empty")
+	}
 	return parsed, nil
 }
 
 func productionDependencies() dependencies {
 	return dependencies{
-		homeDirectory:    os.UserHomeDir,
-		workingDirectory: os.Getwd,
-		now:              time.Now,
-		executor:         process.OSExecutor{},
-		inspectTools:     app.InspectTools,
+		homeDirectory: os.UserHomeDir,
+		absolutePath:  filepath.Abs,
+		now:           time.Now,
+		executor:      process.OSExecutor{},
+		inspectTools:  app.InspectTools,
 		newTerminal: func(
 			service *app.Service,
 			queueRunner *runner.Runner,
@@ -100,6 +107,22 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 	settings, err := settingsStore.LoadOrCreate(config.DefaultSettings())
 	if err != nil {
 		return err
+	}
+	initialDirectory := settings.InputDirectory
+	initialDirectorySource := "settings"
+	if opts.inputDirectory != "" {
+		initialDirectory, err = deps.absolutePath(opts.inputDirectory)
+		if err != nil {
+			return fmt.Errorf("resolve input directory %q: %w", opts.inputDirectory, err)
+		}
+		info, err := os.Stat(initialDirectory)
+		if err != nil {
+			return fmt.Errorf("stat input directory %s: %w", initialDirectory, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("input path is not a directory: %s", initialDirectory)
+		}
+		initialDirectorySource = "command-line"
 	}
 	queueStore := queue.Store{Path: filepath.Join(dataDirectory, "queue.json")}
 	if _, err := queueStore.LoadOrCreate(); err != nil {
@@ -151,15 +174,6 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 		Scanner:         scanner,
 		Presets:         catalog,
 		OutputDirectory: settings.OutputDirectory,
-	}
-	initialDirectory := settings.InputDirectory
-	initialDirectorySource := "settings"
-	if opts.useWorkingDirectory {
-		initialDirectory, err = deps.workingDirectory()
-		if err != nil {
-			return fmt.Errorf("resolve current directory: %w", err)
-		}
-		initialDirectorySource = "cwd"
 	}
 	appLogger.Info("input browser initialized",
 		"directory", initialDirectory,

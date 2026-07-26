@@ -37,11 +37,13 @@ chapterbrake
 ```
 
 引数なしでは`settings.json`の`input_directory`からファイル選択を開始します。
-既定値は`/Volumes/2TB HDD/Images`です。その一回だけ起動したカレント
-ディレクトリから選びたい場合は、設定を書き換えずに`--cwd`を付けます。
+既定値は`/Volumes/2TB HDD/Images`です。その一回だけ別のディレクトリから
+選びたい場合は、設定を書き換えずに`--directory`または短縮形`-d`で指定します。
+相対パスも使用でき、カレントディレクトリなら`.`を指定します。
 
 ```sh
-chapterbrake --cwd
+chapterbrake --directory /path/to/videos
+chapterbrake -d .
 ```
 
 `~/.local/bin`が`PATH`に入っていない場合は、使用しているシェルの設定へ

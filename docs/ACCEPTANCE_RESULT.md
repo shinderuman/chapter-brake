@@ -108,7 +108,7 @@ ffprobe -v error -show_format -show_streams -show_chapters -of json FILE
 | 項目 | 結果 | 主な証拠 |
 | --- | --- | --- |
 | A 起動と保存場所 | PASS | 実アプリ初回起動で設定、空キュー、ログを作成。mode 0600、既定入出力先、version 1から2への移行を確認。厳格JSON試験あり |
-| B ファイル選択 | PASS | 設定入力先と`--cwd`の両方から開始。ディレクトリ、親、通常MKVだけをOS列挙順で表示する単体・TUI画面試験。日本語・空白パスを使用 |
+| B ファイル選択 | PASS | 設定入力先とコマンドライン指定の両方から開始。ディレクトリ、親、通常MKVだけをOS列挙順で表示する単体・TUI画面試験。日本語・空白パスを使用 |
 | C チャプター | PASS | 範囲生成、23分40秒近似、経過時間、全解除、chapter-only引数の表駆動試験。秒・PTS補正なし |
 | D 出力名 | PASS | Unicode stem、既存ファイルとキューを考慮した連番、拡張子、title一致の試験 |
 | E 音声 | PASS | 入力1/2の独立選択、高品質+標準品質、AC-3パススルーとAACフォールバックの試験。実出力構造も確認 |
@@ -179,5 +179,7 @@ git diff --check
   維持された。
 - 引数なしのインストール済みTUIでファイル選択が
   `/Volumes/2TB HDD/Images`から始まることを確認した。
-- `poc/artifacts`から`chapterbrake --cwd`を起動し、同ディレクトリからファイル
-  選択が始まることと、`settings.json`の既定入力先が変更されないことを確認した。
+- カレントディレクトリ専用の`--cwd`は、任意ディレクトリを指定できる
+  `--directory PATH`と短縮形`-d PATH`へ置き換えた。`poc/artifacts`から
+  `chapterbrake -d .`を起動し、同ディレクトリからファイル選択が始まることと、
+  `settings.json`の既定入力先が変更されないことを確認した。
