@@ -1,49 +1,41 @@
-# ChapterBrake — 設計パッケージ
+# ChapterBrake
 
-macOS上でMKVソースを選択し、HandBrakeCLIのプリセット、チャプター分割、音声、字幕を対話的に設定して、永続キューへ追加・順次実行するGoアプリケーション「ChapterBrake」の設計一式です。出力後はDLNA表示用のタイトルメタデータを出力ファイル名へ統一します。
+ChapterBrakeは、macOS上でMKVをチャプター番号の範囲ごとに分割し、
+HandBrakeCLIの永続キューとして順次処理するGo製TUIアプリケーションです。
 
-このZIPには初期実装を含めていません。Codexは最初に短い検証用MKVを用いた実エンコードPoCを行い、チャプター、音声、字幕非焼き付け、プリセット、MKV/MP4のタイトル設定、DLNA表示、即時中断が成立することを証明します。`docs/POC_RESULT.md`が`GO`になるまで製品実装は禁止です。
+各入力音声トラックから高品質版と標準品質版を作り、字幕は焼き付けずに扱います。
+完成ファイルのtitleメタデータはファイル名へ揃えるため、VLCやDLNAクライアントで
+連番どおり識別できます。
 
-## Codexでの開始方法
+## 必要環境
 
-1. このディレクトリをCodexのプロジェクトディレクトリとして開く。
-2. `CODEX_START.md`の内容を最初の指示として渡す。
-3. CodexにMilestone 0のPoCだけを実行させ、GO/NO-GO報告で一度停止させる。
-4. `docs/POC_RESULT.md`が`GO`になった後に、`prompts/02-core.md`以降を順に渡す。
+- macOS
+- Go 1.26系
+- HandBrakeCLI 1.11系
+- FFmpeg / ffprobe 8系
+- MKVToolNix（mkvpropedit）
 
-詳細仕様は`docs/`、実行計画は`PLANS.md`にあります。
+Homebrewでの導入例:
 
-## 実装前PoC
-
-PoCの正本は`docs/POC_GATE.md`です。ヘルプ確認だけでは完了せず、実際の短いエンコードとffprobe・映像/音声ハッシュ・mkvpropedit・ffmpeg・DLNA表示・プロセス停止試験を必須とします。PoC用スパイクは`poc/`へ隔離します。
-
-## 想定成果物
-
-実装後の概略構成は次を想定しています。Codexの調査結果により小規模な変更は可能ですが、不要な階層追加は禁止です。
-
-```text
-.
-├── cmd/
-│   └── chapterbrake/
-│       └── main.go
-├── internal/
-│   ├── app/
-│   ├── config/
-│   ├── handbrake/
-│   ├── metadata/
-│   ├── media/
-│   ├── queue/
-│   ├── runner/
-│   ├── logging/
-│   └── tui/
-├── docs/
-├── AGENTS.md
-├── PLANS.md
-├── go.mod
-└── README.md
+```sh
+brew install go handbrake ffmpeg mkvtoolnix
 ```
 
-## ランタイムデータ
+HandBrake GUIは不要です。既定の`1080p MP4`、`1080p MKV`、`480p MP4`は
+ChapterBrake側で定義し、HandBrakeCLIの標準プリセットを土台にします。
+「その他のプリセットから選ぶ」ではHandBrakeCLIの標準プリセットだけを表示します。
+
+## ビルドと起動
+
+```sh
+go build -o bin/chapterbrake ./cmd/chapterbrake
+./bin/chapterbrake
+```
+
+起動ディレクトリがファイル選択の初期位置になります。日本語・空白を含むパスも
+そのまま扱います。
+
+初回起動時に次を作成します。
 
 ```text
 ~/Documents/ChapterBrake/
@@ -52,8 +44,108 @@ PoCの正本は`docs/POC_GATE.md`です。ヘルプ確認だけでは完了せ�
 └── logs/
 ```
 
-初期設定の出力先は次です。
+初期出力先は`/Volumes/2TB HDD/mp4/`です。初期版に設定画面はありません。
+変更する場合はアプリ停止中に`settings.json`の`output_directory`を絶対パスで
+編集してください。不正JSONや存在しない・書き込めない出力先は自動修復せず、
+エラーで停止します。
 
-```text
-/Volumes/2TB HDD/mp4/
+## 操作の流れ
+
+1. 「新しいジョブを追加」を選ぶ。
+2. ディレクトリを移動し、通常のMKVファイルを一つ選ぶ。
+3. 既定プリセット、または「その他」からHandBrake標準プリセットを選ぶ。
+4. 出力ベース名と開始番号を確認する。
+5. 23分40秒近似の初期チェックを調整し、出力開始チャプターを選ぶ。
+6. 入力音声トラック1・2から一つ以上を選ぶ。
+7. MKVの場合だけ、格納するソフト字幕を選ぶ。
+8. 全出力名、チャプター範囲、音声、字幕、titleをプレビューする。
+9. 既存出力がある場合は、一覧を確認して上書きを承認する。
+10. キューへ追加し、メインメニューの「キューを実行」から順次処理する。
+
+主なキー:
+
+- `↑` / `↓`、`j` / `k`: 項目移動
+- `Enter`: 決定
+- `Space`: チェック切り替え
+- `Backspace`: ファイル選択で親ディレクトリへ戻る
+- `Esc`: 前の画面へ戻る
+- 実行中の`Ctrl+C`: 現在ジョブを即時中断
+
+キュー表示は読み取り専用です。編集、並べ替え、複数同時エンコードは行いません。
+
+## チャプター、音声、字幕
+
+切り出し範囲にはHandBrakeCLIの`--chapters N-M`だけを使います。秒、フレーム、
+PTS指定やエンコード後の境界補正は行いません。HandBrake GUIでも発生する
+素材依存の境界重複・欠落はHandBrakeの仕様として扱います。
+
+音声ビットレートの数値入力はありません。選択した各入力トラックから次を作ります。
+
+- 高品質: PoC済みのAC-3はパススルー。それ以外は高品質AACへフォールバック。
+- 標準品質: AAC stereo。
+
+初期版で選べる入力音声はトラック1・2です。トラック3以降は表示しても
+エンコード対象にはしません。
+
+MKVでは選択字幕をソフト字幕として格納できます。MP4は字幕なしです。
+どちらもHandBrakeの自動字幕選択と焼き付けを明示的に無効化します。
+
+## キュー、上書き、中断
+
+`queue.json`の配列順に一件ずつ実行します。先頭ジョブは、エンコード、title設定、
+ffprobe検証、最終rename、queue保存が成功するまで残ります。
+
+キュー追加時に承認した既存出力は、ジョブ開始時に確認なしで削除します。
+HandBrakeCLIは最終名へ直接書かず、同じ出力ディレクトリのジョブ固有一時ファイルへ
+書きます。
+
+実行中の`Ctrl+C`では、外部プロセスグループへSIGINTを送り、終了しなければ
+期限後にSIGKILLします。プロセスの終了を待ってから部分出力を削除し、キュー先頭を
+残します。次回実行時は同じジョブを最初から処理します。
+
+## title後処理と表示確認
+
+- MKV: `mkvpropedit`で一時MKVのsegment titleだけを直接変更します。
+- MP4: `ffmpeg -c copy`で映像・音声を再エンコードせず、別の一時MP4へtitleを設定します。
+- `ffprobe`でtitle、ストリーム、チャプター、時刻構造を確認した後だけ最終名へrenameします。
+
+title値は常に最終ファイル名から拡張子を除いた文字列です。Twonkyへ配置する前の
+確認は、完成MKV/MP4をVLCで直接開き、表示名がファイル名のstemと一致することを
+確認すれば十分です。
+
+## ログ
+
+`~/Documents/ChapterBrake/logs/`へ次を保存します。
+
+- 日別アプリログ
+- ジョブ要約ログ
+- HandBrakeCLI、ffmpeg、ffprobe、mkvpropeditごとのstdout/stderr生ログ
+
+アプリログには実際に使用する各ツールの絶対パスとバージョンを記録します。
+ジョブ失敗・中断時のTUIエラーには段階とジョブログのパスが含まれます。
+
+ログの自動削除・圧縮・ローテーションは行いません。
+
+## 開発時の検証
+
+通常検証:
+
+```sh
+gofmt -w .
+go test ./...
+go test -race ./...
+go vet ./...
+go build ./...
 ```
+
+PoCの短いMKVと実ツールを使うランナー統合試験:
+
+```sh
+CHAPTERBRAKE_INTEGRATION=1 \
+CHAPTERBRAKE_FIXTURE=/absolute/path/to/source-four-chapters.mkv \
+go test ./internal/runner -run TestRealToolchainIntegration -v -count=1
+```
+
+PoC固有のスクリプトとfixtureは`poc/`の独立Goモジュールへ隔離され、製品の
+ビルド・通常テスト・実行時依存には含まれません。成立根拠は
+`docs/POC_RESULT.md`と`docs/LOCAL_INVESTIGATION.md`にあります。
