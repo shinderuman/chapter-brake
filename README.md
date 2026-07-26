@@ -27,10 +27,22 @@ ChapterBrake側で定義し、HandBrakeCLIの標準プリセットを土台に�
 
 ## ビルドと起動
 
+`make`するとビルド後に`~/.local/bin/chapterbrake`へインストールします。
+
 ```sh
-go build -o bin/chapterbrake ./cmd/chapterbrake
-./bin/chapterbrake
+make
+chapterbrake
 ```
+
+`~/.local/bin`が`PATH`に入っていない場合は、使用しているシェルの設定へ
+次を追加してください。
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+ビルドだけを行う場合は`make build`、配置先を変更する場合は
+`make BINDIR=/absolute/path/to/bin`を使用できます。
 
 起動ディレクトリがファイル選択の初期位置になります。日本語・空白を含むパスも
 そのまま扱います。
