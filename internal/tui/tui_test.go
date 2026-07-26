@@ -152,6 +152,82 @@ func TestHelpers(t *testing.T) {
 	}
 }
 
+func TestListNavigation(t *testing.T) {
+	backCalls := 0
+	escapeCalls := 0
+	capture := listNavigation(
+		func() { backCalls++ },
+		func() { escapeCalls++ },
+	)
+
+	if event := capture(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); event.Key() != tcell.KeyEnter {
+		t.Fatalf("right mapped to %v, want Enter", event.Key())
+	}
+	if event := capture(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); event != nil || backCalls != 1 {
+		t.Fatalf("left result = %v, back calls = %d", event, backCalls)
+	}
+	if event := capture(tcell.NewEventKey(tcell.KeyBackspace2, 0, tcell.ModNone)); event != nil || backCalls != 2 {
+		t.Fatalf("backspace result = %v, back calls = %d", event, backCalls)
+	}
+	if event := capture(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone)); event != nil || escapeCalls != 1 {
+		t.Fatalf("escape result = %v, escape calls = %d", event, escapeCalls)
+	}
+	up := tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone)
+	if event := capture(up); event != up {
+		t.Fatalf("up event was replaced: %v", event)
+	}
+}
+
+func TestFormNavigation(t *testing.T) {
+	backCalls := 0
+	form := tview.NewForm().
+		AddInputField("name", "source", 20, nil, nil).
+		AddCheckbox("selected", false, nil).
+		AddButton("next", nil)
+	capture := formNavigation(form, func() { backCalls++ })
+	var focus func(tview.Primitive)
+	focus = func(primitive tview.Primitive) {
+		primitive.Focus(focus)
+	}
+	form.Focus(focus)
+
+	form.SetFocus(0)
+	for _, key := range []tcell.Key{tcell.KeyLeft, tcell.KeyRight, tcell.KeyBackspace, tcell.KeyBackspace2} {
+		input := tcell.NewEventKey(key, 0, tcell.ModNone)
+		if event := capture(input); event != input {
+			t.Fatalf("input key %v was replaced with %v", key, event)
+		}
+	}
+	if event := capture(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)); event.Key() != tcell.KeyTab {
+		t.Fatalf("input down mapped to %v, want Tab", event.Key())
+	}
+	if event := capture(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone)); event.Key() != tcell.KeyBacktab {
+		t.Fatalf("input up mapped to %v, want Backtab", event.Key())
+	}
+	if event := capture(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone)); event != nil || backCalls != 1 {
+		t.Fatalf("input escape result = %v, back calls = %d", event, backCalls)
+	}
+
+	form.SetFocus(1)
+	for _, key := range []tcell.Key{tcell.KeyLeft, tcell.KeyRight} {
+		event := capture(tcell.NewEventKey(key, 0, tcell.ModNone))
+		if event.Key() != tcell.KeyRune || event.Rune() != ' ' {
+			t.Fatalf("checkbox key %v mapped to key=%v rune=%q", key, event.Key(), event.Rune())
+		}
+	}
+	if event := capture(tcell.NewEventKey(tcell.KeyBackspace2, 0, tcell.ModNone)); event != nil || backCalls != 2 {
+		t.Fatalf("checkbox backspace result = %v, back calls = %d", event, backCalls)
+	}
+
+	form.SetFocus(2)
+	if event := capture(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); event.Key() != tcell.KeyBacktab {
+		t.Fatalf("button left mapped to %v, want Backtab", event.Key())
+	}
+	if event := capture(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); event.Key() != tcell.KeyTab {
+		t.Fatalf("button right mapped to %v, want Tab", event.Key())
+	}
+}
+
 func TestWorkflowScreensBuildFromDraft(t *testing.T) {
 	root := t.TempDir()
 	input := filepath.Join(root, "日本語 source.mkv")

@@ -102,7 +102,8 @@ func (u *UI) showMain() {
 		AddItem("キューを表示", "", 'q', u.showQueue).
 		AddItem("キューを実行", "", 'r', u.startQueue).
 		AddItem("終了", "", 'x', u.terminal.Stop)
-	list.SetTitle(fmt.Sprintf(" ChapterBrake — 待機中: %d件 ", waiting)).SetBorder(true)
+	list.SetTitle(fmt.Sprintf(" ChapterBrake — 待機中: %d件 — ↑↓:移動 →/Enter:決定 ", waiting)).SetBorder(true)
+	list.SetInputCapture(listNavigation(nil, nil))
 	u.switchPage("main", list)
 }
 
@@ -113,7 +114,7 @@ func (u *UI) showFiles(directory string) {
 		return
 	}
 	list := tview.NewList()
-	list.SetTitle(" 入力MKVを選択 — " + directory + " ").SetBorder(true)
+	list.SetTitle(" 入力MKVを選択 — ↑↓:移動 →/Enter:決定 ←:親 BS/Esc:戻る — " + directory + " ").SetBorder(true)
 	for _, entry := range entries {
 		entry := entry
 		secondary := ""
@@ -130,15 +131,17 @@ func (u *UI) showFiles(directory string) {
 	}
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
-		case tcell.KeyEsc:
+		case tcell.KeyEsc, tcell.KeyBackspace, tcell.KeyBackspace2:
 			u.showMain()
 			return nil
-		case tcell.KeyBackspace, tcell.KeyBackspace2:
+		case tcell.KeyLeft:
 			parent := filepath.Dir(directory)
 			if parent != directory {
 				u.showFiles(parent)
 			}
 			return nil
+		case tcell.KeyRight:
+			return enterKey()
 		}
 		return event
 	})
@@ -162,7 +165,7 @@ func (u *UI) analyze(input string) {
 
 func (u *UI) showPreset() {
 	list := tview.NewList()
-	list.SetTitle(" プリセット — My Presets相当 ").SetBorder(true)
+	list.SetTitle(" プリセット — My Presets相当 — ↑↓:移動 →/Enter:決定 ←/BS/Esc:戻る ").SetBorder(true)
 	for _, preset := range u.service.Presets.Curated() {
 		preset := preset
 		list.AddItem(preset.DisplayName, preset.Summary, 0, func() {
@@ -170,13 +173,8 @@ func (u *UI) showPreset() {
 		})
 	}
 	list.AddItem("その他のプリセットから選ぶ", "HandBrake標準プリセット", 0, u.loadStandardPresets)
-	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEsc {
-			u.showFiles(filepath.Dir(u.draft.Input))
-			return nil
-		}
-		return event
-	})
+	back := func() { u.showFiles(filepath.Dir(u.draft.Input)) }
+	list.SetInputCapture(listNavigation(back, back))
 	u.switchPage("preset", list)
 }
 
@@ -196,20 +194,14 @@ func (u *UI) loadStandardPresets() {
 
 func (u *UI) showStandardPresets(presets []handbrake.StandardPreset) {
 	list := tview.NewList()
-	list.SetTitle(" その他のプリセット ").SetBorder(true)
+	list.SetTitle(" その他のプリセット — ↑↓:移動 →/Enter:決定 ←/BS/Esc:戻る ").SetBorder(true)
 	for _, preset := range presets {
 		preset := preset
 		list.AddItem(preset.Name, preset.Category, 0, func() {
 			u.resolveStandardPreset(preset.Name)
 		})
 	}
-	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEsc {
-			u.showPreset()
-			return nil
-		}
-		return event
-	})
+	list.SetInputCapture(listNavigation(u.showPreset, u.showPreset))
 	u.switchPage("standard-presets", list)
 }
 
@@ -262,8 +254,8 @@ func (u *UI) showNaming() {
 			u.showChapters()
 		}).
 		AddButton("戻る", u.showPreset)
-	form.SetTitle(" 出力名 ").SetBorder(true)
-	form.SetInputCapture(escapeTo(u.showPreset))
+	form.SetTitle(" 出力名 — ↑↓/Tab:移動 ←→:カーソル BS:削除 Esc:戻る ").SetBorder(true)
+	form.SetInputCapture(formNavigation(form, u.showPreset))
 	u.switchPage("naming", form)
 }
 
@@ -293,7 +285,7 @@ func (u *UI) showChapters() {
 		if u.draft.AutoChapters {
 			mode = "23分40秒近似: 有効"
 		}
-		form.SetTitle(" チャプター開始位置 — " + mode + "（絶対時刻 / 選択位置からの経過） ")
+		form.SetTitle(" チャプター開始位置 — " + mode + " — ↑↓:移動 ←→/Space:切替 BS/Esc:戻る ")
 		elapsed, available := elapsedForDisplay(u.draft.Media.Chapters, sortedKeys(selected))
 		for i, chapter := range u.draft.Media.Chapters {
 			relative := "-"
@@ -335,7 +327,7 @@ func (u *UI) showChapters() {
 		}).
 		AddButton("戻る", u.showNaming)
 	form.SetBorder(true)
-	form.SetInputCapture(escapeTo(u.showNaming))
+	form.SetInputCapture(formNavigation(form, u.showNaming))
 	u.switchPage("chapters", form)
 }
 
@@ -372,8 +364,8 @@ func (u *UI) showAudio() {
 		u.showSubtitles()
 	})
 	form.AddButton("戻る", u.showChapters)
-	form.SetTitle(" 音声トラック ").SetBorder(true)
-	form.SetInputCapture(escapeTo(u.showChapters))
+	form.SetTitle(" 音声トラック — ↑↓:移動 ←→/Space:切替 BS/Esc:戻る ").SetBorder(true)
+	form.SetInputCapture(formNavigation(form, u.showChapters))
 	u.switchPage("audio", form)
 }
 
@@ -425,8 +417,8 @@ func (u *UI) showSubtitles() {
 	form.AddTextView("", "焼き付け: 無効", 40, 1, false, false)
 	form.AddButton("次へ", u.showPreview)
 	form.AddButton("戻る", u.showAudio)
-	form.SetTitle(" 字幕 ").SetBorder(true)
-	form.SetInputCapture(escapeTo(u.showAudio))
+	form.SetTitle(" 字幕 — ↑↓:移動 ←→/Space:切替 BS/Esc:戻る ").SetBorder(true)
+	form.SetInputCapture(formNavigation(form, u.showAudio))
 	u.switchPage("subtitles", form)
 }
 
@@ -479,17 +471,19 @@ func (u *UI) showPreview() {
 		}
 		u.showMessage("キュー追加", fmt.Sprintf("%d件を追加しました", len(u.preview.Jobs)), u.showMain)
 	})
-	form.AddButton("戻る", func() {
+	back := func() {
 		if u.draft.Preset.Container == queue.ContainerMKV {
 			u.showSubtitles()
 		} else {
 			u.showAudio()
 		}
-	})
+	}
+	form.AddButton("戻る", back)
+	form.SetInputCapture(formNavigation(form, back))
 	layout := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(body, 0, 1, false).
 		AddItem(form, 3, 0, true)
-	layout.SetTitle(" 実行プレビュー ").SetBorder(true)
+	layout.SetTitle(" 実行プレビュー — ←→/↑↓:移動 BS/Esc:戻る ").SetBorder(true)
 	u.switchPage("preview", layout)
 }
 
@@ -511,8 +505,8 @@ func (u *UI) showQueue() {
 	if len(q.Jobs) == 0 {
 		list.AddItem("キューは空です", "", 0, nil)
 	}
-	list.SetTitle(" キュー（表示のみ） ").SetBorder(true)
-	list.SetInputCapture(escapeTo(u.showMain))
+	list.SetTitle(" キュー（表示のみ）— ←/BS/Esc:戻る ").SetBorder(true)
+	list.SetInputCapture(listNavigation(u.showMain, u.showMain))
 	u.switchPage("queue", list)
 }
 
@@ -632,15 +626,26 @@ func (u *UI) showError(title string, err error, done func()) {
 }
 
 func (u *UI) showMessage(title, message string, done func()) {
+	close := func() {
+		if done != nil {
+			done()
+		}
+	}
 	modal := tview.NewModal().
 		SetText(message).
 		AddButtons([]string{"OK"}).
 		SetDoneFunc(func(int, string) {
-			if done != nil {
-				done()
-			}
+			close()
 		})
 	modal.SetTitle(" " + title + " ")
+	modal.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEsc, tcell.KeyBackspace, tcell.KeyBackspace2:
+			close()
+			return nil
+		}
+		return event
+	})
 	u.switchPage("message", modal)
 }
 
@@ -650,14 +655,73 @@ func (u *UI) switchPage(name string, primitive tview.Primitive) {
 	u.terminal.SetFocus(primitive)
 }
 
-func escapeTo(back func()) func(*tcell.EventKey) *tcell.EventKey {
+func listNavigation(back, escape func()) func(*tcell.EventKey) *tcell.EventKey {
 	return func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyRight:
+			return enterKey()
+		case tcell.KeyLeft, tcell.KeyBackspace, tcell.KeyBackspace2:
+			if back != nil {
+				back()
+				return nil
+			}
+		case tcell.KeyEsc:
+			if escape != nil {
+				escape()
+				return nil
+			}
+		}
+		return event
+	}
+}
+
+func formNavigation(form *tview.Form, back func()) func(*tcell.EventKey) *tcell.EventKey {
+	return func(event *tcell.EventKey) *tcell.EventKey {
+		itemIndex, _ := form.GetFocusedItemIndex()
+		var item tview.FormItem
+		if itemIndex >= 0 {
+			item = form.GetFormItem(itemIndex)
+		}
+		_, isInput := item.(*tview.InputField)
+		_, isCheckbox := item.(*tview.Checkbox)
+
 		if event.Key() == tcell.KeyEsc {
 			back()
 			return nil
 		}
+		if isInput {
+			switch event.Key() {
+			case tcell.KeyUp:
+				return tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone)
+			case tcell.KeyDown:
+				return tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+			}
+			return event
+		}
+
+		switch event.Key() {
+		case tcell.KeyBackspace, tcell.KeyBackspace2:
+			back()
+			return nil
+		case tcell.KeyUp:
+			return tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone)
+		case tcell.KeyDown:
+			return tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+		case tcell.KeyLeft, tcell.KeyRight:
+			if isCheckbox {
+				return tcell.NewEventKey(tcell.KeyRune, ' ', tcell.ModNone)
+			}
+			if event.Key() == tcell.KeyLeft {
+				return tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone)
+			}
+			return tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+		}
 		return event
 	}
+}
+
+func enterKey() *tcell.EventKey {
+	return tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)
 }
 
 func intSet(values []int) map[int]bool {

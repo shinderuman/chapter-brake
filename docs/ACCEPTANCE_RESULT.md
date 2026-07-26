@@ -164,3 +164,7 @@ git diff --check
 - 黒帯付き720x480入力を実エンコードし、`My Old Presets`相当の
   `--crop-mode auto`は720x360、`GCCX`相当の`--crop-mode none`は720x480に
   なることをffprobeで確認した。
+- インストール済みTUIを実際に操作し、一覧の上下移動と右キー決定、フォームの
+  上下移動、チェック項目の左右切り替え、入力欄内のBackspace文字削除、
+  入力欄以外のBackspaceによる前画面遷移を確認した。従来のTab、Enter、Space、
+  Esc操作も維持している。
