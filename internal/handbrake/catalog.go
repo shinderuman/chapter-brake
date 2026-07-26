@@ -39,21 +39,38 @@ func (c Catalog) ListStandard(
 	if stdout == nil {
 		stdout = io.Discard
 	}
-	capture := process.NewLimitedCapture(presetListCaptureLimit)
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	stdoutCapture := process.NewLimitedCapture(presetListCaptureLimit)
+	stderrCapture := process.NewLimitedCapture(presetListCaptureLimit)
 	err := c.Executor.Run(
 		ctx,
 		process.Invocation{Executable: c.executable(), Args: PresetListArgs()},
-		io.MultiWriter(stdout, capture),
-		stderr,
+		io.MultiWriter(stdout, stdoutCapture),
+		io.MultiWriter(stderr, stderrCapture),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list HandBrake presets: %w", err)
 	}
-	data, err := capture.Bytes()
+	stdoutData, err := stdoutCapture.Bytes()
 	if err != nil {
-		return nil, fmt.Errorf("capture HandBrake preset list: %w", err)
+		return nil, fmt.Errorf("capture HandBrake preset list stdout: %w", err)
 	}
-	presets, err := ParsePresetList(data)
+	stderrData, err := stderrCapture.Bytes()
+	if err != nil {
+		return nil, fmt.Errorf("capture HandBrake preset list stderr: %w", err)
+	}
+	for _, data := range [][]byte{stdoutData, stderrData} {
+		if presets, parseErr := ParsePresetList(data); parseErr == nil {
+			return presets, nil
+		}
+	}
+	combined := make([]byte, 0, len(stdoutData)+len(stderrData)+1)
+	combined = append(combined, stdoutData...)
+	combined = append(combined, '\n')
+	combined = append(combined, stderrData...)
+	presets, err := ParsePresetList(combined)
 	if err != nil {
 		return nil, fmt.Errorf("parse HandBrake preset list: %w", err)
 	}
@@ -66,10 +83,8 @@ func (c Catalog) Resolve(
 	stdout io.Writer,
 	stderr io.Writer,
 ) (Preset, error) {
-	for _, preset := range CuratedPresets() {
-		if preset.DisplayName == displayName {
-			return preset, nil
-		}
+	if preset, ok := resolveCuratedPreset(displayName); ok {
+		return preset, nil
 	}
 	if c.Executor == nil {
 		return Preset{}, fmt.Errorf("preset executor is nil")

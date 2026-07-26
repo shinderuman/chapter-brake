@@ -45,24 +45,29 @@ func TestParsePresetList(t *testing.T) {
 }
 
 type catalogExecutor struct {
-	listOutput []byte
-	exportJSON string
-	err        error
-	calls      []process.Invocation
+	listOutput   []byte
+	listOnStderr bool
+	exportJSON   string
+	err          error
+	calls        []process.Invocation
 }
 
 func (e *catalogExecutor) Run(
 	_ context.Context,
 	invocation process.Invocation,
 	stdout io.Writer,
-	_ io.Writer,
+	stderr io.Writer,
 ) error {
 	e.calls = append(e.calls, invocation)
 	if e.err != nil {
 		return e.err
 	}
 	if reflect.DeepEqual(invocation.Args, PresetListArgs()) {
-		_, _ = stdout.Write(e.listOutput)
+		output := stdout
+		if e.listOnStderr {
+			output = stderr
+		}
+		_, _ = output.Write(e.listOutput)
 		return nil
 	}
 	for i, arg := range invocation.Args {
@@ -74,18 +79,30 @@ func (e *catalogExecutor) Run(
 }
 
 func TestCatalogListStandard(t *testing.T) {
-	executor := &catalogExecutor{listOutput: []byte(presetListText)}
-	var raw bytes.Buffer
-	catalog := Catalog{Executor: executor, HandBrake: "/opt/homebrew/bin/HandBrakeCLI"}
-	got, err := catalog.ListStandard(context.Background(), &raw, io.Discard)
-	if err != nil {
-		t.Fatalf("ListStandard() error = %v", err)
-	}
-	if len(got) != 3 || raw.String() != presetListText {
-		t.Fatalf("ListStandard() = %#v, raw %q", got, raw.String())
-	}
-	if executor.calls[0].Executable != "/opt/homebrew/bin/HandBrakeCLI" {
-		t.Fatalf("executable = %q", executor.calls[0].Executable)
+	for _, onStderr := range []bool{false, true} {
+		t.Run(fmt.Sprintf("list on stderr=%t", onStderr), func(t *testing.T) {
+			executor := &catalogExecutor{
+				listOutput:   []byte(presetListText),
+				listOnStderr: onStderr,
+			}
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			catalog := Catalog{Executor: executor, HandBrake: "/opt/homebrew/bin/HandBrakeCLI"}
+			got, err := catalog.ListStandard(context.Background(), &stdout, &stderr)
+			if err != nil {
+				t.Fatalf("ListStandard() error = %v", err)
+			}
+			if len(got) != 3 {
+				t.Fatalf("ListStandard() = %#v", got)
+			}
+			raw := stdout.String() + stderr.String()
+			if raw != presetListText {
+				t.Fatalf("raw preset list = %q", raw)
+			}
+			if executor.calls[0].Executable != "/opt/homebrew/bin/HandBrakeCLI" {
+				t.Fatalf("executable = %q", executor.calls[0].Executable)
+			}
+		})
 	}
 }
 

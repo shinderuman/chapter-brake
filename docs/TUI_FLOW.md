@@ -67,9 +67,10 @@ source-a.mkv
 HandBrake GUIやGUI設定ファイルは参照しない。検索や階層折り畳みは不要。
 
 ```text
-> 1080p MP4
-  1080p MKV
-  480p MP4
+> MP4 Presets       1080p MP4・自動クロップ
+  MKV Presets       1080p MKV・自動クロップ
+  My Old Presets    480p MP4・自動クロップ
+  GCCX              480p MP4・クロップなし
   その他のプリセットから選ぶ
 ```
 

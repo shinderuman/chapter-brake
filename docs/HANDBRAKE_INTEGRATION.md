@@ -23,6 +23,11 @@
 - キューにはプリセット名と確定コンテナを保存する。
 - 内蔵プリセットはHandBrake標準プリセットを土台に解像度と出力形式を確定する。
   音声・字幕選択はChapterBrakeの方針でCLI引数を明示して上書きする。
+- 内蔵4件はGUI設定を実行時に読まず、`MP4 Presets`、`MKV Presets`、
+  `My Old Presets`、`GCCX`として保持する。480pの前者は`--crop-mode auto`、
+  後者は`--crop-mode none`を明示する。
+- HandBrakeCLI 1.11.2の`--preset-list`は一覧本体をstderrへ出すため、
+  標準プリセット一覧はstdoutとstderrの両方を取得して解析する。
 
 ## 2. スキャン
 

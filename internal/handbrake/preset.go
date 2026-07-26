@@ -10,29 +10,45 @@ import (
 
 type Preset struct {
 	DisplayName       string
+	Summary           string
 	HandBrakeName     string
 	Container         queue.Container
+	CropMode          string
 	ChapterBrakeOwned bool
 }
 
 func CuratedPresets() []Preset {
 	return []Preset{
 		{
-			DisplayName:       "1080p MP4",
+			DisplayName:       "MP4 Presets",
+			Summary:           "1080p MP4・自動クロップ",
 			HandBrakeName:     "Super HQ 1080p30 Surround",
 			Container:         queue.ContainerMP4,
+			CropMode:          "auto",
 			ChapterBrakeOwned: true,
 		},
 		{
-			DisplayName:       "1080p MKV",
+			DisplayName:       "MKV Presets",
+			Summary:           "1080p MKV・自動クロップ",
 			HandBrakeName:     "H.264 MKV 1080p30",
 			Container:         queue.ContainerMKV,
+			CropMode:          "auto",
 			ChapterBrakeOwned: true,
 		},
 		{
-			DisplayName:       "480p MP4",
+			DisplayName:       "My Old Presets",
+			Summary:           "480p MP4・自動クロップ",
 			HandBrakeName:     "Fast 480p30",
 			Container:         queue.ContainerMP4,
+			CropMode:          "auto",
+			ChapterBrakeOwned: true,
+		},
+		{
+			DisplayName:       "GCCX",
+			Summary:           "480p MP4・クロップなし",
+			HandBrakeName:     "Fast 480p30",
+			Container:         queue.ContainerMP4,
+			CropMode:          "none",
 			ChapterBrakeOwned: true,
 		},
 	}
@@ -48,22 +64,23 @@ func (p Preset) Validate() error {
 	if p.Container != queue.ContainerMKV && p.Container != queue.ContainerMP4 {
 		return fmt.Errorf("unsupported preset container %q", p.Container)
 	}
+	if p.CropMode != "" && p.CropMode != "auto" && p.CropMode != "none" {
+		return fmt.Errorf("unsupported preset crop mode %q", p.CropMode)
+	}
 	return nil
 }
 
 func ResolveQueuedPreset(name string, container queue.Container) (Preset, error) {
-	for _, preset := range CuratedPresets() {
-		if preset.DisplayName == name {
-			if preset.Container != container {
-				return Preset{}, fmt.Errorf(
-					"queued container %q does not match curated preset %q container %q",
-					container,
-					name,
-					preset.Container,
-				)
-			}
-			return preset, nil
+	if preset, ok := resolveCuratedPreset(name); ok {
+		if preset.Container != container {
+			return Preset{}, fmt.Errorf(
+				"queued container %q does not match curated preset %q container %q",
+				container,
+				name,
+				preset.Container,
+			)
 		}
+		return preset, nil
 	}
 	preset := Preset{
 		DisplayName:   name,
@@ -74,6 +91,29 @@ func ResolveQueuedPreset(name string, container queue.Container) (Preset, error)
 		return Preset{}, err
 	}
 	return preset, nil
+}
+
+func resolveCuratedPreset(name string) (Preset, bool) {
+	for _, preset := range CuratedPresets() {
+		if preset.DisplayName == name {
+			return preset, true
+		}
+	}
+	index := -1
+	switch name {
+	case "1080p MP4":
+		index = 0
+	case "1080p MKV":
+		index = 1
+	case "480p MP4":
+		index = 2
+	}
+	if index < 0 {
+		return Preset{}, false
+	}
+	preset := CuratedPresets()[index]
+	preset.DisplayName = name
+	return preset, true
 }
 
 type presetDocument struct {

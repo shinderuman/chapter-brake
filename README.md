@@ -21,8 +21,10 @@ Homebrewでの導入例:
 brew install go handbrake ffmpeg mkvtoolnix
 ```
 
-HandBrake GUIは不要です。既定の`1080p MP4`、`1080p MKV`、`480p MP4`は
+HandBrake GUIは不要です。既定一覧にはGUIのMy Presetsに対応する
+`MP4 Presets`、`MKV Presets`、`My Old Presets`、`GCCX`の4件を
 ChapterBrake側で定義し、HandBrakeCLIの標準プリセットを土台にします。
+低解像度の`My Old Presets`は自動クロップ、`GCCX`はクロップなしです。
 「その他のプリセットから選ぶ」ではHandBrakeCLIの標準プリセットだけを表示します。
 
 ## ビルドと起動

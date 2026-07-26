@@ -12,10 +12,10 @@ import (
 
 func TestCuratedPresets(t *testing.T) {
 	got := CuratedPresets()
-	if len(got) != 3 {
-		t.Fatalf("len(CuratedPresets()) = %d, want 3", len(got))
+	if len(got) != 4 {
+		t.Fatalf("len(CuratedPresets()) = %d, want 4", len(got))
 	}
-	wantNames := []string{"1080p MP4", "1080p MKV", "480p MP4"}
+	wantNames := []string{"MP4 Presets", "MKV Presets", "My Old Presets", "GCCX"}
 	for i, preset := range got {
 		if err := preset.Validate(); err != nil {
 			t.Fatalf("preset %d invalid: %v", i, err)
@@ -30,6 +30,9 @@ func TestCuratedPresets(t *testing.T) {
 	if got[1].HandBrakeName != "H.264 MKV 1080p30" {
 		t.Fatalf("1080p MKV HandBrake base = %q", got[1].HandBrakeName)
 	}
+	if got[2].CropMode != "auto" || got[3].CropMode != "none" {
+		t.Fatalf("480p crop modes = %q, %q", got[2].CropMode, got[3].CropMode)
+	}
 }
 
 func TestResolveQueuedPreset(t *testing.T) {
@@ -43,6 +46,10 @@ func TestResolveQueuedPreset(t *testing.T) {
 	}
 	if _, err := ResolveQueuedPreset("1080p MKV", queue.ContainerMP4); err == nil {
 		t.Fatal("ResolveQueuedPreset(mismatched curated container) error = nil")
+	}
+	current, err := ResolveQueuedPreset("GCCX", queue.ContainerMP4)
+	if err != nil || current.CropMode != "none" {
+		t.Fatalf("ResolveQueuedPreset(GCCX) = %#v, %v", current, err)
 	}
 }
 
@@ -183,7 +190,7 @@ func encodeJob() queue.Job {
 		CreatedAt:    time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
 		Input:        "/input/番組.mkv",
 		Output:       "/output/番組_01.mkv",
-		Preset:       "1080p MKV",
+		Preset:       "MKV Presets",
 		Container:    queue.ContainerMKV,
 		ChapterStart: 2,
 		ChapterEnd:   5,
@@ -210,6 +217,7 @@ func TestEncodeArgs(t *testing.T) {
 		"-o", "/output/.chapterbrake-job-1-encode.mkv",
 		"--chapters", "2-5",
 		"--markers",
+		"--crop-mode", "auto",
 		"--audio", "1,1,2,2",
 		"--aencoder", "copy:ac3,ca_aac,ca_aac,ca_aac",
 		"--ab", "640,160,640,160",
@@ -231,10 +239,30 @@ func TestEncodeArgs(t *testing.T) {
 	}
 }
 
+func TestEncodeArgsUsesCuratedCropMode(t *testing.T) {
+	job := encodeJob()
+	job.Output = "/output/番組_01.mp4"
+	job.Preset = "GCCX"
+	job.Container = queue.ContainerMP4
+	job.Subtitles = []int{}
+	preset := CuratedPresets()[3]
+	tracks := []media.AudioTrack{
+		{Number: 1, Codec: "AC3", Channels: 6},
+		{Number: 2, Codec: "AC3", Channels: 6},
+	}
+	got, err := EncodeArgs(job, "/output/.chapterbrake-job-1-encode.mp4", preset, tracks)
+	if err != nil {
+		t.Fatalf("EncodeArgs() error = %v", err)
+	}
+	if !containsPair(got, "--crop-mode", "none") {
+		t.Fatalf("EncodeArgs() crop mode = %q", got)
+	}
+}
+
 func TestEncodeArgsMP4HasNoSubtitles(t *testing.T) {
 	job := encodeJob()
 	job.Output = "/output/番組_01.mp4"
-	job.Preset = "1080p MP4"
+	job.Preset = "MP4 Presets"
 	job.Container = queue.ContainerMP4
 	job.Subtitles = []int{}
 	preset := CuratedPresets()[0]
@@ -266,6 +294,7 @@ func TestEncodeArgsValidation(t *testing.T) {
 		{"relative temp", func(j *queue.Job) {}, func() string { return "temp.mkv" }, func(*Preset) {}},
 		{"different directory", func(j *queue.Job) {}, func() string { return "/other/temp.mkv" }, func(*Preset) {}},
 		{"final path", func(j *queue.Job) {}, func() string { return job.Output }, func(*Preset) {}},
+		{"bad crop", func(j *queue.Job) {}, nil, func(p *Preset) { p.CropMode = "invalid" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

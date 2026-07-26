@@ -62,8 +62,10 @@ ffprobeは出力検証とメタデータ比較に使う。ffprobe indexをHandBr
 PoCでは`--preset-import-gui`でGUIカスタムプリセットを取り込めることと、
 JSONの`FileFormat`から`av_mp4` / `av_mkv`を判定できることを確認した。
 製品は後続の利用者判断によりGUIへ依存せず、ChapterBrake内蔵の
-`1080p MP4`、`1080p MKV`、`480p MP4`を既定候補とする。その他の候補は
-HandBrakeCLIの標準プリセット一覧から取得する。
+`MP4 Presets`、`MKV Presets`、`My Old Presets`、`GCCX`を既定候補とする。
+低解像度2件は同じ480p MP4だが、前者の自動クロップと後者のクロップなしを
+別選択肢として維持する。その他の候補はHandBrakeCLIの標準プリセット一覧から
+取得する。
 
 ### チャプター範囲指定
 

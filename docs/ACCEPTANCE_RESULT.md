@@ -149,3 +149,18 @@ git diff --check
   音声・字幕のlanguageは厳格比較する。
 - 入力音声は初期版ではトラック1・2だけを選択対象とする。
 - MP4は初期版では字幕なしとする。
+
+## 受け入れ後の修正確認
+
+2026-07-26に次を追加確認した。
+
+- HandBrakeCLI 1.11.2の`--preset-list`は一覧本体をstderrへ出力する。製品が
+  stdout/stderrの両方から標準プリセット一覧を取得し、`Fast 1080p30`を選択して
+  MP4と判定できることを実ツール統合試験で確認した。
+- `~/.local/bin/chapterbrake`のTUIを実際に操作し、内蔵4件が表示され、
+  「その他のプリセットから選ぶ」からHandBrake標準プリセット一覧へ
+  エラーなく遷移することを確認した。
+- GUIのMy Presets 4件を一対一の内蔵選択肢へ戻した。
+- 黒帯付き720x480入力を実エンコードし、`My Old Presets`相当の
+  `--crop-mode auto`は720x360、`GCCX`相当の`--crop-mode none`は720x480に
+  なることをffprobeで確認した。

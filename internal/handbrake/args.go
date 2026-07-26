@@ -64,6 +64,9 @@ func EncodeArgs(job queue.Job, encodeOutput string, preset Preset, availableAudi
 		"--chapters", fmt.Sprintf("%d-%d", job.ChapterStart, job.ChapterEnd),
 		"--markers",
 	}
+	if preset.CropMode != "" {
+		args = append(args, "--crop-mode", preset.CropMode)
+	}
 	audioTracks := make([]string, len(audio))
 	encoders := make([]string, len(audio))
 	bitrates := make([]string, len(audio))

@@ -165,7 +165,7 @@ func (u *UI) showPreset() {
 	list.SetTitle(" プリセット — My Presets相当 ").SetBorder(true)
 	for _, preset := range u.service.Presets.Curated() {
 		preset := preset
-		list.AddItem(preset.DisplayName, preset.HandBrakeName, 0, func() {
+		list.AddItem(preset.DisplayName, preset.Summary, 0, func() {
 			u.selectPreset(preset)
 		})
 	}

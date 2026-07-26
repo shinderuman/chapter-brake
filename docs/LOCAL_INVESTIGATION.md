@@ -60,12 +60,21 @@ HandBrakeCLI --preset-import-gui --preset-list
 
 `My Presets`配下に次の実プリセットが存在した。
 
-| プリセット | `FileFormat` | `VideoEncoder` |
-|---|---|---|
-| MP4 Presets | `av_mp4` | `x264` |
-| MKV Presets | `av_mkv` | `x264` |
-| My Old Presets | `av_mp4` | `x264` |
-| GCCX | `av_mp4` | `x264` |
+| プリセット | `FileFormat` | 最大解像度 | `PictureCropMode` |
+|---|---|---|---|
+| MP4 Presets | `av_mp4` | 1920x1080 | 0（auto） |
+| MKV Presets | `av_mkv` | 1920x1080 | 0（auto） |
+| My Old Presets | `av_mp4` | 720x480 | 0（auto） |
+| GCCX | `av_mp4` | 720x480 | 2（none） |
+
+`My Old Presets`と`GCCX`の全フィールドを比較すると、実質的な利用者向け差は
+自動クロップの有無だった。製品ではそれぞれ`--crop-mode auto`と
+`--crop-mode none`を明示して区別する。
+
+720x480映像の上下へ60pxずつ黒帯を付けた12秒の検証MKVを作り、
+`Fast 480p30`へ各crop modeを明示して実エンコードした。ffprobe結果は
+`auto`が720x360、`none`が720x480となり、内蔵2件の差が実出力へ反映される
+ことを確認した。
 
 名前文字列ではなく、プリセットJSONの`FileFormat`を再帰走査すれば
 `av_mp4` / `av_mkv`を確定できる。CLIから選択したプリセットをエクスポートした
