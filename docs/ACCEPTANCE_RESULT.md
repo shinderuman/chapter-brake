@@ -108,7 +108,7 @@ ffprobe -v error -show_format -show_streams -show_chapters -of json FILE
 | 項目 | 結果 | 主な証拠 |
 | --- | --- | --- |
 | A 起動と保存場所 | PASS | 実アプリ初回起動で設定、空キュー、ログを作成。mode 0600、既定入出力先・区切り時間、version 1・2から3への移行を確認。厳格JSON試験あり |
-| B ファイル選択 | PASS | 設定入力先とコマンドライン指定の両方から開始。ディレクトリ、親、通常MKVだけをOS列挙順で表示する単体・TUI画面試験。日本語・空白パスを使用 |
+| B ファイル選択 | PASS | 設定入力先とコマンドライン指定の両方から開始。親を先頭、ディレクトリと通常MKVを名前昇順で表示する単体・TUI画面試験。日本語・空白パスを使用 |
 | C チャプター | PASS | 設定可能な区切り時間による近似、画面変更・再計算、範囲生成、経過時間、全解除、chapter-only引数の表駆動試験。秒・PTS補正なし |
 | D 出力名 | PASS | Unicode stem、既存ファイルとキューを考慮した連番、拡張子、title一致の試験 |
 | E 音声 | PASS | 入力1/2の独立選択、高品質+標準品質、AC-3パススルーとAACフォールバックの試験。実出力構造も確認 |
@@ -190,3 +190,7 @@ git diff --check
   `45:00近似: 有効`へ更新され、近似選択が再計算された。
 - 画面を終了した後も実`settings.json`の`chapter_interval`が`23:40`のままで、
   一時変更が設定へ書き戻されないことを確認した。
+- ファイル選択一覧を`../`先頭、大文字小文字を区別しない名前昇順へ変更した。
+  インストール済みTUIを`poc/artifacts`で開き、`audio-preset-rule-match.mkv`、
+  `audio-preset-rule-order.mkv`、`audio-quality-fallback.mkv`の順に並ぶことを
+  確認した。

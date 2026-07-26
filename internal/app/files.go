@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -54,5 +55,20 @@ func ListInputEntries(directory string) ([]FileEntry, error) {
 		}
 		result = append(result, FileEntry{Name: entry.Name(), Path: path, Size: info.Size()})
 	}
+	sortStart := 0
+	if len(result) > 0 && result[0].Name == "../" {
+		sortStart = 1
+	}
+	sortable := result[sortStart:]
+	sort.Slice(sortable, func(i, j int) bool {
+		left := sortable[i].Name
+		right := sortable[j].Name
+		leftFolded := strings.ToLower(left)
+		rightFolded := strings.ToLower(right)
+		if leftFolded == rightFolded {
+			return left < right
+		}
+		return leftFolded < rightFolded
+	})
 	return result, nil
 }
