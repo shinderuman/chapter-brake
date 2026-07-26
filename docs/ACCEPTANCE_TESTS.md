@@ -11,12 +11,15 @@
 ## A. 起動と保存場所
 
 - 初回起動で`~/Documents/ChapterBrake/`、`settings.json`、`queue.json`、`logs/`が作成される。
+- `settings.json`の既定入力先が`/Volumes/2TB HDD/Images`。
 - `settings.json`の既定出力先が`/Volumes/2TB HDD/mp4/`。
+- version 1設定は既存出力先を維持し、既定入力先を追加してversion 2へ移行する。
 - 不正な設定JSONを勝手に上書きしない。
 
 ## B. ファイル選択
 
-- 起動ディレクトリから開始する。
+- 通常起動では`settings.json`の`input_directory`から開始する。
+- `--cwd`付きではカレントディレクトリから開始し、設定を書き換えない。
 - ディレクトリとMKVだけを表示する。
 - MKVの容量を表示する。
 - 子へ入り、親へ戻れる。

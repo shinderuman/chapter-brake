@@ -55,7 +55,8 @@ internal/tui
 ### `internal/config`
 
 - データディレクトリ解決。
-- `settings.json`の読み書き、既定作成、検証。
+- 入出力ディレクトリを保持する`settings.json`の読み書き、既定作成、検証、
+  既知の旧形式からの移行。
 
 ### `internal/queue`
 

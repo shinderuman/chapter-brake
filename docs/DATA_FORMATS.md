@@ -17,18 +17,24 @@
 
 ```json
 {
-  "version": 1,
+  "version": 2,
+  "input_directory": "/Volumes/2TB HDD/Images",
   "output_directory": "/Volumes/2TB HDD/mp4/"
 }
 ```
 
 要件:
 
-- `version`は必須で1。
-- `output_directory`は絶対パス。
-- 読み込み時に存在、ディレクトリ種別、書き込み可能性を検証する。
+- `version`は必須で2。
+- `input_directory`と`output_directory`は絶対パス。
+- 読み込み時に両方の存在とディレクトリ種別を検証し、出力先は書き込み可能性も
+  検証する。
 - ファイルがなければ既定値で作成する。
+- version 1の既知形式は`output_directory`を維持し、既定の
+  `input_directory`を追加してversion 2へ原子的に移行する。
 - JSON不正または未知のversionの場合はエラーで停止し、勝手に上書きしない。
+- `--cwd`は一回の起動だけファイル選択の初期位置をカレントディレクトリへ
+  差し替え、設定ファイルを書き換えない。
 - 初期版では設定編集UIを作らない。
 
 ## queue.json

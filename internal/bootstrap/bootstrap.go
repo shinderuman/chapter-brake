@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -35,12 +36,38 @@ type dependencies struct {
 	newTerminal      func(*app.Service, *runner.Runner, string) (terminal, error)
 }
 
+type runOptions struct {
+	useWorkingDirectory bool
+}
+
 // Run initializes and runs ChapterBrake until the user exits or macOS asks it
 // to terminate.
-func Run() error {
+func Run(args []string) error {
+	opts, err := parseOptions(args)
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return run(ctx, productionDependencies())
+	return run(ctx, productionDependencies(), opts)
+}
+
+func parseOptions(args []string) (runOptions, error) {
+	flags := flag.NewFlagSet("chapterbrake", flag.ContinueOnError)
+	var parsed runOptions
+	flags.BoolVar(
+		&parsed.useWorkingDirectory,
+		"cwd",
+		false,
+		"use the current working directory instead of settings.json input_directory",
+	)
+	if err := flags.Parse(args); err != nil {
+		return runOptions{}, err
+	}
+	if flags.NArg() != 0 {
+		return runOptions{}, fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+	return parsed, nil
 }
 
 func productionDependencies() dependencies {
@@ -60,7 +87,7 @@ func productionDependencies() dependencies {
 	}
 }
 
-func run(ctx context.Context, deps dependencies) error {
+func run(ctx context.Context, deps dependencies, opts runOptions) error {
 	home, err := deps.homeDirectory()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
@@ -87,6 +114,7 @@ func run(ctx context.Context, deps dependencies) error {
 	defer appLogCloser.Close()
 	appLogger.Info("application starting",
 		"data_directory", dataDirectory,
+		"input_directory", settings.InputDirectory,
 		"output_directory", settings.OutputDirectory,
 		"app_log", appLogPath,
 	)
@@ -124,10 +152,19 @@ func run(ctx context.Context, deps dependencies) error {
 		Presets:         catalog,
 		OutputDirectory: settings.OutputDirectory,
 	}
-	initialDirectory, err := deps.workingDirectory()
-	if err != nil {
-		return fmt.Errorf("resolve current directory: %w", err)
+	initialDirectory := settings.InputDirectory
+	initialDirectorySource := "settings"
+	if opts.useWorkingDirectory {
+		initialDirectory, err = deps.workingDirectory()
+		if err != nil {
+			return fmt.Errorf("resolve current directory: %w", err)
+		}
+		initialDirectorySource = "cwd"
 	}
+	appLogger.Info("input browser initialized",
+		"directory", initialDirectory,
+		"source", initialDirectorySource,
+	)
 	screen, err := deps.newTerminal(service, queueRunner, initialDirectory)
 	if err != nil {
 		return err

@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	if err := bootstrap.Run(); err != nil {
+	if err := bootstrap.Run(os.Args[1:]); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "chapterbrake:", err)
 		os.Exit(1)
 	}

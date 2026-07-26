@@ -36,6 +36,14 @@ make
 chapterbrake
 ```
 
+引数なしでは`settings.json`の`input_directory`からファイル選択を開始します。
+既定値は`/Volumes/2TB HDD/Images`です。その一回だけ起動したカレント
+ディレクトリから選びたい場合は、設定を書き換えずに`--cwd`を付けます。
+
+```sh
+chapterbrake --cwd
+```
+
 `~/.local/bin`が`PATH`に入っていない場合は、使用しているシェルの設定へ
 次を追加してください。
 
@@ -46,9 +54,6 @@ export PATH="$HOME/.local/bin:$PATH"
 ビルドだけを行う場合は`make build`、配置先を変更する場合は
 `make BINDIR=/absolute/path/to/bin`を使用できます。
 
-起動ディレクトリがファイル選択の初期位置になります。日本語・空白を含むパスも
-そのまま扱います。
-
 初回起動時に次を作成します。
 
 ```text
@@ -58,10 +63,12 @@ export PATH="$HOME/.local/bin:$PATH"
 └── logs/
 ```
 
-初期出力先は`/Volumes/2TB HDD/mp4/`です。初期版に設定画面はありません。
-変更する場合はアプリ停止中に`settings.json`の`output_directory`を絶対パスで
-編集してください。不正JSONや存在しない・書き込めない出力先は自動修復せず、
-エラーで停止します。
+初期入力先は`/Volumes/2TB HDD/Images`、初期出力先は
+`/Volumes/2TB HDD/mp4/`です。初期版に設定画面はありません。恒久的に変更する
+場合はアプリ停止中に`settings.json`の`input_directory`または
+`output_directory`を絶対パスで編集してください。version 1の既存設定は、
+出力先を維持したままversion 2へ自動移行します。不正JSON、未知のversion、
+存在しない入力先、存在しない・書き込めない出力先は自動修復せずエラーで停止します。
 
 ## 操作の流れ
 
