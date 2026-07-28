@@ -90,6 +90,9 @@ func TestRunBuildsApplication(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDirectory, "queue.json")); err != nil {
 		t.Fatalf("queue.json: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(dataDirectory, "state.json")); err != nil {
+		t.Fatalf("state.json: %v", err)
+	}
 	home := filepath.Dir(filepath.Dir(dataDirectory))
 	logDirectory, err := config.LogDirectory(home)
 	if err != nil {
@@ -98,6 +101,45 @@ func TestRunBuildsApplication(t *testing.T) {
 	logs, err := filepath.Glob(filepath.Join(logDirectory, "app-*.log"))
 	if err != nil || len(logs) != 1 {
 		t.Fatalf("app logs = %v, %v", logs, err)
+	}
+}
+
+func TestRunLoadsExportedMyPresets(t *testing.T) {
+	deps, dataDirectory, _, _ := testDependencies(t)
+	presetPath := filepath.Join(dataDirectory, "My Presets.json")
+	presetJSON := `{
+		"PresetList": [{
+			"PresetName": "My Presets",
+			"Folder": true,
+			"ChildrenArray": [{
+				"PresetName": "Custom GUI MKV",
+				"FileFormat": "av_mkv",
+				"PictureWidth": 1920,
+				"PictureHeight": 1080,
+				"PictureCropMode": 2
+			}]
+		}]
+	}`
+	if err := os.WriteFile(presetPath, []byte(presetJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var gotService *app.Service
+	deps.newTerminal = func(
+		service *app.Service,
+		_ *runner.Runner,
+		_ string,
+	) (terminal, error) {
+		gotService = service
+		return &fakeTerminal{}, nil
+	}
+
+	if err := run(context.Background(), deps, runOptions{}); err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	presets := gotService.Presets.Curated()
+	if len(presets) != 1 || presets[0].DisplayName != "Custom GUI MKV" ||
+		presets[0].ImportFile != presetPath {
+		t.Fatalf("curated presets = %#v", presets)
 	}
 }
 
