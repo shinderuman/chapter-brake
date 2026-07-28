@@ -19,6 +19,7 @@ import (
 	"chapterbrake/internal/process"
 	"chapterbrake/internal/queue"
 	"chapterbrake/internal/runner"
+	"chapterbrake/internal/runstate"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -107,6 +108,28 @@ type uiExecutor struct{}
 
 func (uiExecutor) Run(context.Context, process.Invocation, io.Writer, io.Writer) error { return nil }
 
+type uiPausableExecutor struct {
+	paused bool
+}
+
+func (*uiPausableExecutor) Run(context.Context, process.Invocation, io.Writer, io.Writer) error {
+	return nil
+}
+
+func (e *uiPausableExecutor) Pause() error {
+	e.paused = true
+	return nil
+}
+
+func (e *uiPausableExecutor) Resume() error {
+	e.paused = false
+	return nil
+}
+
+func (e *uiPausableExecutor) IsPaused() bool {
+	return e.paused
+}
+
 type cancelExecutor struct {
 	started chan struct{}
 }
@@ -160,9 +183,13 @@ func TestNewBuildsMainMenu(t *testing.T) {
 	if name != "main" {
 		t.Fatalf("front page = %q", name)
 	}
-	list, ok := primitive.(*tview.List)
+	layout, ok := primitive.(*tview.Flex)
 	if !ok {
 		t.Fatalf("main primitive = %T", primitive)
+	}
+	list, ok := layout.GetItem(0).(*tview.List)
+	if !ok {
+		t.Fatalf("main menu = %T", layout.GetItem(0))
 	}
 	if list.GetItemCount() != 3 {
 		t.Fatalf("menu items = %d, want 3", list.GetItemCount())
@@ -204,6 +231,129 @@ func TestHelpers(t *testing.T) {
 		if got := channelLabel(channels); got != want {
 			t.Fatalf("channelLabel(%d) = %q, want %q", channels, got, want)
 		}
+	}
+}
+
+func TestQueueOverviewDurationsAndETA(t *testing.T) {
+	jobs := []queue.Job{
+		{ID: "first", Output: "/output/first.mkv", DurationSeconds: 1420},
+		{ID: "second", Output: "/output/second.mkv", DurationSeconds: 600},
+	}
+	q := queue.Queue{Version: queue.Version, Jobs: jobs}
+	snapshot := queueSnapshot{
+		running:         true,
+		currentJobID:    "first",
+		currentProgress: 0.5,
+		currentETA:      time.Minute,
+		speedFactor:     2,
+	}
+	eta, ok := estimateQueueETA(q, snapshot)
+	if !ok || eta != 21*time.Minute {
+		t.Fatalf("estimateQueueETA() = %s, %t", eta, ok)
+	}
+	text := formatQueueOverview(q, snapshot)
+	for _, want := range []string{"全体ETA 約21:00", "約23:40", "約10:00", "first.mkv", "second.mkv"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("queue overview %q does not contain %q", text, want)
+		}
+	}
+}
+
+func TestPersistentFailureMakesMainAndQueueBordersRed(t *testing.T) {
+	root := t.TempDir()
+	job := queue.Job{
+		ID:           "job-1",
+		CreatedAt:    time.Now(),
+		Input:        filepath.Join(root, "source.mkv"),
+		Output:       filepath.Join(root, "output.mkv"),
+		Preset:       "MKV Presets",
+		Container:    queue.ContainerMKV,
+		ChapterStart: 1,
+		ChapterEnd:   1,
+		AudioTracks:  []int{1},
+		Subtitles:    []int{},
+	}
+	store := &uiStore{q: queue.Queue{Version: queue.Version, Jobs: []queue.Job{job}}}
+	stateStore := &runstate.Store{Path: filepath.Join(root, "state.json")}
+	if _, err := stateStore.LoadOrCreate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateStore.MarkFailed(job, "handbrake", "I/O error", "/logs/job.log", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ui, err := New(
+		&app.Service{QueueStore: store, Presets: uiCatalog{}, OutputDirectory: root},
+		&runner.Runner{Store: store, State: stateStore},
+		root,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := frontPrimitive[*tview.Flex](t, ui)
+	if main.GetBorderColor() != tcell.ColorRed || !strings.Contains(main.GetTitle(), "異常停止") {
+		t.Fatalf("main alert border/title = %v, %q", main.GetBorderColor(), main.GetTitle())
+	}
+	ui.showQueue()
+	queueList := frontPrimitive[*tview.List](t, ui)
+	if queueList.GetBorderColor() != tcell.ColorRed || !strings.Contains(queueList.GetTitle(), "異常停止") {
+		t.Fatalf("queue alert border/title = %v, %q", queueList.GetBorderColor(), queueList.GetTitle())
+	}
+}
+
+func TestRunningQueueDetailPausesAndResumesCurrentEncode(t *testing.T) {
+	root := t.TempDir()
+	job := queue.Job{
+		ID:              "job-1",
+		CreatedAt:       time.Now(),
+		Input:           filepath.Join(root, "source.mkv"),
+		Output:          filepath.Join(root, "output.mkv"),
+		Preset:          "MKV Presets",
+		Container:       queue.ContainerMKV,
+		ChapterStart:    1,
+		ChapterEnd:      1,
+		DurationSeconds: 1420,
+		AudioTracks:     []int{1},
+		Subtitles:       []int{},
+	}
+	store := &uiStore{q: queue.Queue{Version: queue.Version, Jobs: []queue.Job{job}}}
+	executor := &uiPausableExecutor{}
+	ui, err := New(
+		&app.Service{QueueStore: store, Presets: uiCatalog{}, OutputDirectory: root},
+		&runner.Runner{Store: store, Executor: executor},
+		root,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui.running = true
+	ui.currentJobID = job.ID
+	ui.currentStage = "handbrake"
+	ui.currentStartedAt = time.Now()
+	ui.showQueueJob(job)
+
+	detail := frontPrimitive[*tview.Flex](t, ui)
+	controls := detail.GetItem(1).(*tview.Form)
+	if got := controls.GetButton(0).GetLabel(); got != "エンコードを一時停止" {
+		t.Fatalf("pause button = %q", got)
+	}
+	controls.GetButton(0).InputHandler()(
+		tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone),
+		func(tview.Primitive) {},
+	)
+	if !executor.paused || !ui.encodingPaused {
+		t.Fatalf("pause state = executor:%t UI:%t", executor.paused, ui.encodingPaused)
+	}
+	detail = frontPrimitive[*tview.Flex](t, ui)
+	controls = detail.GetItem(1).(*tview.Form)
+	if got := controls.GetButton(0).GetLabel(); got != "エンコードを再開" {
+		t.Fatalf("resume button = %q", got)
+	}
+	controls.GetButton(0).InputHandler()(
+		tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone),
+		func(tview.Primitive) {},
+	)
+	if executor.paused || ui.encodingPaused {
+		t.Fatalf("resume state = executor:%t UI:%t", executor.paused, ui.encodingPaused)
 	}
 }
 
@@ -404,6 +554,8 @@ func TestWorkflowScreensBuildFromDraft(t *testing.T) {
 	if files.GetItemCount() != 3 {
 		t.Fatalf("file list items = %d, want parent, directory, and MKV only", files.GetItemCount())
 	}
+	files.GetInputCapture()(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
+	assertFrontPage(t, ui, "files")
 
 	ui.showPreset()
 	assertFrontPage(t, ui, "preset")
@@ -429,14 +581,15 @@ func TestWorkflowScreensBuildFromDraft(t *testing.T) {
 		t.Fatalf("naming Enter event = %v, want nil", event)
 	}
 	assertFrontPage(t, ui, "chapters")
-	chapters := frontPrimitive[*tview.Form](t, ui)
-	interval := chapters.GetFormItem(0).(*tview.InputField)
+	chapters := frontPrimitive[*tview.Flex](t, ui)
+	intervalForm := chapters.GetItem(0).(*tview.Form)
+	interval := intervalForm.GetFormItem(0).(*tview.InputField)
 	if interval.GetText() != "23:40" {
 		t.Fatalf("initial interval = %q", interval.GetText())
 	}
 	interval.SetText("45:00")
-	chapters.SetFocus(0)
-	if event := chapters.GetInputCapture()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil {
+	intervalForm.SetFocus(0)
+	if event := intervalForm.GetInputCapture()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil {
 		t.Fatalf("chapter interval Enter event = %v, want nil", event)
 	}
 	assertFrontPage(t, ui, "audio")
@@ -447,11 +600,13 @@ func TestWorkflowScreensBuildFromDraft(t *testing.T) {
 		t.Fatalf("selected chapters = %v, want [1]", ui.draft.SelectedChapters)
 	}
 	ui.showChapters()
-	chapters = frontPrimitive[*tview.Form](t, ui)
-	if chapters.GetFormItemCount() != len(ui.draft.Media.Chapters)+4 {
-		t.Fatalf("chapter items = %d", chapters.GetFormItemCount())
+	chapters = frontPrimitive[*tview.Flex](t, ui)
+	table := chapters.GetItem(3).(*tview.Table)
+	if table.GetRowCount() != len(ui.draft.Media.Chapters)+1 {
+		t.Fatalf("chapter rows = %d", table.GetRowCount())
 	}
-	if label := chapters.GetButton(0).GetLabel(); label != "入力した時間の近似値にチェック" {
+	footer := chapters.GetItem(4).(*tview.Form)
+	if label := footer.GetButton(0).GetLabel(); label != "入力した時間の近似値にチェック" {
 		t.Fatalf("approximation button = %q", label)
 	}
 
@@ -483,6 +638,16 @@ func TestWorkflowScreensBuildFromDraft(t *testing.T) {
 	queued := frontPrimitive[*tview.List](t, ui)
 	if queued.GetItemCount() != 1 {
 		t.Fatalf("queue items = %d", queued.GetItemCount())
+	}
+	_, queueDetail := queued.GetItemText(0)
+	if !strings.Contains(queueDetail, "約1:00:00") {
+		t.Fatalf("queue duration detail = %q", queueDetail)
+	}
+	ui.showQueueJob(store.q.Jobs[0])
+	queueJob := frontPrimitive[*tview.Flex](t, ui)
+	detailText := queueJob.GetItem(0).(*tview.TextView).GetText(false)
+	if !strings.Contains(detailText, "動画時間: 約1:00:00") {
+		t.Fatalf("queue job duration = %q", detailText)
 	}
 
 	ui.showBusy("busy")
@@ -592,7 +757,7 @@ func TestQueueDetailsDeleteButtonRemovesConfirmedWaitingJob(t *testing.T) {
 	}
 }
 
-func TestQueueJKReordersJobsWithoutMovingSelection(t *testing.T) {
+func TestQueueJKReordersSameJobRepeatedlyAndMovesSelectionWithIt(t *testing.T) {
 	root := t.TempDir()
 	jobs := make([]queue.Job, 3)
 	for i := range jobs {
@@ -632,11 +797,15 @@ func TestQueueJKReordersJobsWithoutMovingSelection(t *testing.T) {
 	if list.GetCurrentItem() != 1 {
 		t.Fatalf("selection after k = %d, want 1", list.GetCurrentItem())
 	}
-	if event := list.GetInputCapture()(tcell.NewEventKey(tcell.KeyRune, 'j', tcell.ModNone)); event != nil {
-		t.Fatalf("j event = %v", event)
+	if event := list.GetInputCapture()(tcell.NewEventKey(tcell.KeyRune, 'k', tcell.ModNone)); event != nil {
+		t.Fatalf("second k event = %v", event)
 	}
-	if got := []string{store.q.Jobs[0].ID, store.q.Jobs[1].ID, store.q.Jobs[2].ID}; !reflect.DeepEqual(got, []string{"job-1", "job-2", "job-3"}) {
-		t.Fatalf("queue after j = %v", got)
+	if got := []string{store.q.Jobs[0].ID, store.q.Jobs[1].ID, store.q.Jobs[2].ID}; !reflect.DeepEqual(got, []string{"job-3", "job-1", "job-2"}) {
+		t.Fatalf("queue after second k = %v", got)
+	}
+	list = frontPrimitive[*tview.List](t, ui)
+	if list.GetCurrentItem() != 0 {
+		t.Fatalf("selection after second k = %d, want 0", list.GetCurrentItem())
 	}
 }
 
@@ -662,10 +831,11 @@ func TestChaptersRejectInvalidChapterInterval(t *testing.T) {
 		SelectedChapters: []int{1},
 	}
 	ui.showChapters()
-	chapters := frontPrimitive[*tview.Form](t, ui)
-	chapters.GetFormItem(0).(*tview.InputField).SetText("23:60")
-	chapters.SetFocus(0)
-	if event := chapters.GetInputCapture()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil {
+	chapters := frontPrimitive[*tview.Flex](t, ui)
+	intervalForm := chapters.GetItem(0).(*tview.Form)
+	intervalForm.GetFormItem(0).(*tview.InputField).SetText("23:60")
+	intervalForm.SetFocus(0)
+	if event := intervalForm.GetInputCapture()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); event != nil {
 		t.Fatalf("chapter interval Enter event = %v, want nil", event)
 	}
 	assertFrontPage(t, ui, "message")
@@ -703,13 +873,14 @@ func TestShortFinalChapterCheckboxCanRestoreFinalChapter(t *testing.T) {
 	}
 
 	ui.showChapters()
-	chapters := frontPrimitive[*tview.Form](t, ui)
-	exclude := chapters.GetFormItem(3).(*tview.Checkbox)
+	chapters := frontPrimitive[*tview.Flex](t, ui)
+	exclude := chapters.GetItem(2).(*tview.Form).GetFormItem(0).(*tview.Checkbox)
 	if !exclude.IsChecked() || !strings.Contains(exclude.GetLabel(), "chapter 003 / 0:01") {
 		t.Fatalf("exclude checkbox = %t, %q", exclude.IsChecked(), exclude.GetLabel())
 	}
-	final := chapters.GetFormItem(6).(*tview.Checkbox)
-	final.SetChecked(true)
+	table := chapters.GetItem(3).(*tview.Table)
+	table.Select(3, 0)
+	table.GetInputCapture()(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
 	if ui.draft.ExcludeFinal || exclude.IsChecked() {
 		t.Fatalf("final chapter check did not disable exclusion: draft=%t checkbox=%t",
 			ui.draft.ExcludeFinal, exclude.IsChecked())
@@ -719,9 +890,9 @@ func TestShortFinalChapterCheckboxCanRestoreFinalChapter(t *testing.T) {
 	}
 
 	exclude.SetChecked(true)
-	if !ui.draft.ExcludeFinal || final.IsChecked() {
-		t.Fatalf("exclusion did not clear final start: draft=%t final=%t",
-			ui.draft.ExcludeFinal, final.IsChecked())
+	if !ui.draft.ExcludeFinal || table.GetCell(3, 0).Text != "[ ]" {
+		t.Fatalf("exclusion did not clear final start: draft=%t cell=%q",
+			ui.draft.ExcludeFinal, table.GetCell(3, 0).Text)
 	}
 	if !reflect.DeepEqual(ui.draft.SelectedChapters, []int{1, 2}) {
 		t.Fatalf("selected chapters after exclusion = %v", ui.draft.SelectedChapters)
@@ -896,6 +1067,7 @@ func TestRunningQueueUsesIntegratedQueueScreenAndImmediateAbort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ui.draft.Input = input
 	screen := tcell.NewSimulationScreen("UTF-8")
 	if err := screen.Init(); err != nil {
 		t.Fatal(err)
@@ -915,8 +1087,20 @@ func TestRunningQueueUsesIntegratedQueueScreenAndImmediateAbort(t *testing.T) {
 		ui.Stop()
 		t.Fatal("runner did not start")
 	}
-	screen.PostEventWait(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone))
 	deadline := time.Now().Add(2 * time.Second)
+	for {
+		page := runningFrontPage(ui)
+		if page == "files" {
+			break
+		}
+		if time.Now().After(deadline) {
+			ui.Stop()
+			t.Fatalf("automatic queue start did not return to file selection; page = %q", page)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	screen.PostEventWait(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone))
+	deadline = time.Now().Add(2 * time.Second)
 	for {
 		page := runningFrontPage(ui)
 		if page == "main" {

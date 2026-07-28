@@ -15,6 +15,7 @@ import (
 	"chapterbrake/internal/media"
 	"chapterbrake/internal/queue"
 	"chapterbrake/internal/runner"
+	"chapterbrake/internal/runstate"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -43,6 +44,13 @@ type UI struct {
 	currentStage      string
 	currentProgress   float64
 	currentETA        time.Duration
+	currentDuration   time.Duration
+	currentStartedAt  time.Time
+	currentPausedAt   time.Time
+	currentPausedFor  time.Duration
+	encodingPaused    bool
+	speedFactor       float64
+	mainSelection     int
 	queueSelection    int
 	lastRunError      string
 }
@@ -104,20 +112,24 @@ func (u *UI) Pages() *tview.Pages {
 func (u *UI) showMain() {
 	u.adding = false
 	q, err := u.service.Queue()
-	waiting := 0
-	if err == nil {
-		waiting = len(q.Jobs)
-	}
+	waiting := len(q.Jobs)
 	u.mu.Lock()
 	running := u.running
 	paused := u.queuePaused
 	summary := u.runSummary
+	snapshot := u.queueSnapshotLocked()
 	u.mu.Unlock()
+	alert, alertErr := u.queueAlert()
 	queueLabel := "キュー・実行状況"
 	list := tview.NewList().
 		AddItem("新しいジョブを追加", "", 'a', u.startAdd).
 		AddItem(queueLabel, "", 'q', u.showQueue).
 		AddItem("終了", "", 'x', u.requestExit)
+	list.ShowSecondaryText(false)
+	list.SetCurrentItem(u.mainSelection)
+	list.SetChangedFunc(func(index int, _, _ string, _ rune) {
+		u.mainSelection = index
+	})
 	state := fmt.Sprintf("待機中: %d件", waiting)
 	if running {
 		state = fmt.Sprintf("キュー実行中: %d件", waiting)
@@ -126,9 +138,26 @@ func (u *UI) showMain() {
 	} else if summary != "" {
 		state += " — " + summary
 	}
-	list.SetTitle(fmt.Sprintf(" ChapterBrake — %s — ↑↓:移動 →/Enter:決定 ", state)).SetBorder(true)
 	list.SetInputCapture(listNavigation(nil, nil))
-	u.switchPage("main", list)
+	queueView := tview.NewTextView().SetDynamicColors(true)
+	if err != nil {
+		queueView.SetText("[red]キュー読込エラー: " + err.Error() + "[white]")
+	} else {
+		queueView.SetText(formatQueueOverview(q, snapshot))
+	}
+	layout := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(list, 5, 0, true).
+		AddItem(queueView, 0, 1, false)
+	title := fmt.Sprintf(" ChapterBrake — %s — ↑↓:移動 →/Enter:決定 ", state)
+	if alertErr != nil {
+		title = " ChapterBrake — 状態読込エラー: " + alertErr.Error() + " "
+		layout.SetBorderColor(tcell.ColorRed)
+	} else if alert.Status == runstate.StatusFailed {
+		title = " ChapterBrake — 異常停止: " + alert.Message + " "
+		layout.SetBorderColor(tcell.ColorRed)
+	}
+	layout.SetTitle(title).SetBorder(true)
+	u.switchPage("main", layout)
 }
 
 func (u *UI) requestExit() {
@@ -179,7 +208,7 @@ func (u *UI) showFiles(directory string) {
 		return
 	}
 	list := tview.NewList()
-	list.SetTitle(" 入力MKVを選択 — ↑↓:移動 →/Enter:決定 ←:親 BS/Esc:戻る — " + directory + " ").SetBorder(true)
+	list.SetTitle(" 入力MKVを選択 — ↑↓:移動 →/Enter:決定 BS/Esc:戻る — " + directory + " ").SetBorder(true)
 	for _, entry := range entries {
 		entry := entry
 		secondary := ""
@@ -198,12 +227,6 @@ func (u *UI) showFiles(directory string) {
 		switch event.Key() {
 		case tcell.KeyEsc, tcell.KeyBackspace, tcell.KeyBackspace2:
 			u.showMain()
-			return nil
-		case tcell.KeyLeft:
-			parent := filepath.Dir(directory)
-			if parent != directory {
-				u.showFiles(parent)
-			}
 			return nil
 		case tcell.KeyRight:
 			return enterKey()
@@ -340,19 +363,31 @@ func (u *UI) showNaming() {
 func (u *UI) showChapters() {
 	intervalLabel := media.FormatChapterInterval(u.draft.ChapterInterval)
 	selected := intSet(u.draft.SelectedChapters)
-	form := tview.NewForm()
 	interval := tview.NewInputField().
 		SetLabel("区切り時間 (分:秒): ").
 		SetText(intervalLabel).
 		SetFieldWidth(8)
-	form.AddFormItem(interval)
+	intervalForm := tview.NewForm().AddFormItem(interval)
 	summary := tview.NewTextView().SetDynamicColors(true)
-	form.AddFormItem(summary)
-	form.AddTextView("", "番号  開始      単体      出力合計  タイトル", 80, 1, false, false)
-	boxes := make([]*tview.Checkbox, len(u.draft.Media.Chapters))
+	table := tview.NewTable().
+		SetSelectable(true, false).
+		SetFixed(1, 0).
+		SetSelectedStyle(tcell.StyleDefault.Background(tcell.ColorBlue).Foreground(tcell.ColorWhite))
+	headers := []string{"選択", "番号", "開始", "単体", "出力合計", "タイトル"}
+	for column, header := range headers {
+		table.SetCell(
+			0,
+			column,
+			tview.NewTableCell(header).
+				SetTextColor(tcell.ColorWhite).
+				SetSelectable(false).
+				SetAttributes(tcell.AttrBold),
+		)
+	}
 	refresh := func() {}
 	updatingFinal := false
 	var excludeFinal *tview.Checkbox
+	var excludeForm *tview.Form
 	finalChapter := len(u.draft.Media.Chapters)
 	if finalChapter > 1 {
 		finalDuration, err := media.FinalChapterDuration(u.draft.Media.Chapters, u.draft.Media.Duration)
@@ -375,52 +410,26 @@ func (u *UI) showChapters() {
 			if checked {
 				delete(selected, finalChapter)
 				u.draft.SelectedChapters = sortedKeys(selected)
-				if boxes[finalChapter-1] != nil {
-					updatingFinal = true
-					boxes[finalChapter-1].SetChecked(false)
-					updatingFinal = false
-				}
 			}
 			refresh()
 		})
-		form.AddFormItem(excludeFinal)
+		excludeForm = tview.NewForm().AddFormItem(excludeFinal)
 	}
-	for i, chapter := range u.draft.Media.Chapters {
-		chapter := chapter
-		box := tview.NewCheckbox().SetChecked(selected[chapter.Number])
-		box.SetChangedFunc(func(checked bool) {
-			if updatingFinal {
-				return
-			}
-			if checked && chapter.Number == finalChapter && u.draft.ExcludeFinal {
-				updatingFinal = true
-				u.draft.ExcludeFinal = false
-				if excludeFinal != nil {
-					excludeFinal.SetChecked(false)
-				}
-				updatingFinal = false
-			}
-			u.draft.AutoChapters = false
-			u.draft.TailMerged = false
-			if checked {
-				selected[chapter.Number] = true
-			} else {
-				delete(selected, chapter.Number)
-			}
-			u.draft.SelectedChapters = sortedKeys(selected)
-			refresh()
-		})
-		boxes[i] = box
-		form.AddFormItem(box)
+	chapterDurations, err := media.ChapterDurations(u.draft.Media.Chapters, u.draft.Media.Duration)
+	if err != nil {
+		u.showError("チャプター", err, u.showNaming)
+		return
 	}
+	var layout *tview.Flex
 	refresh = func() {
 		mode := "手動"
 		if u.draft.AutoChapters {
 			mode = media.FormatChapterInterval(u.draft.ChapterInterval) + "近似: 有効"
 		}
-		form.SetTitle(" チャプター開始位置 — " + mode + " — ↑↓:移動 ←→/Space:切替 Enter:次 Esc:トップ ")
+		if layout != nil {
+			layout.SetTitle(" チャプター開始位置 — " + mode + " — ↑↓:移動 ←→/Space:切替 Enter:次 Esc:トップ ")
+		}
 		selectedStarts := sortedKeys(selected)
-		chapterDurations, _ := media.ChapterDurations(u.draft.Media.Chapters, u.draft.Media.Duration)
 		effectiveFinal := finalChapter
 		if u.draft.ExcludeFinal {
 			effectiveFinal--
@@ -453,17 +462,27 @@ func (u *UI) showChapters() {
 			if chapter.Number == finalChapter && u.draft.ExcludeFinal {
 				title = strings.TrimSpace(title + "  [末尾除外]")
 			}
-			boxes[i].SetLabel(fmt.Sprintf(
-				"%03d  %-8s  %-8s  %-8s  %s",
-				chapter.Number,
+			checked := "[ ]"
+			if selected[chapter.Number] {
+				checked = "[x]"
+			}
+			values := []string{
+				checked,
+				fmt.Sprintf("%03d", chapter.Number),
 				formatDuration(chapter.Start),
 				formatDuration(chapterDurations[i]),
 				outputDuration,
 				title,
-			))
+			}
+			for column, value := range values {
+				cell := tview.NewTableCell(value).SetTextColor(tcell.ColorYellow)
+				if column == 5 {
+					cell.SetExpansion(1)
+				}
+				table.SetCell(i+1, column, cell)
+			}
 		}
 	}
-	refresh()
 	updateApproximation := func(force bool) error {
 		chapterInterval, err := media.ParseChapterInterval(interval.GetText())
 		if err != nil {
@@ -501,7 +520,32 @@ func (u *UI) showChapters() {
 		}
 		u.showAudio()
 	}
-	form.
+	toggleChapter := func(row int) {
+		index := row - 1
+		if index < 0 || index >= len(u.draft.Media.Chapters) {
+			return
+		}
+		chapter := u.draft.Media.Chapters[index]
+		checked := !selected[chapter.Number]
+		if checked && chapter.Number == finalChapter && u.draft.ExcludeFinal {
+			updatingFinal = true
+			u.draft.ExcludeFinal = false
+			if excludeFinal != nil {
+				excludeFinal.SetChecked(false)
+			}
+			updatingFinal = false
+		}
+		u.draft.AutoChapters = false
+		u.draft.TailMerged = false
+		if checked {
+			selected[chapter.Number] = true
+		} else {
+			delete(selected, chapter.Number)
+		}
+		u.draft.SelectedChapters = sortedKeys(selected)
+		refresh()
+	}
+	footer := tview.NewForm().
 		AddButton("入力した時間の近似値にチェック", func() {
 			if err := updateApproximation(true); err != nil {
 				u.showError("チャプター", err, u.showChapters)
@@ -516,10 +560,118 @@ func (u *UI) showChapters() {
 		}).
 		AddButton("次へ", next).
 		AddButton("戻る", u.showNaming)
-	form.SetBorder(true)
-	navigate := formNavigation(form, u.showNaming, u.showMain, next)
-	form.SetInputCapture(navigate)
-	u.switchPage("chapters", form)
+	layout = tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(intervalForm, 2, 0, true).
+		AddItem(summary, 2, 0, false)
+	if excludeForm != nil {
+		layout.AddItem(excludeForm, 2, 0, false)
+	}
+	layout.
+		AddItem(table, 0, 1, false).
+		AddItem(footer, 3, 0, false).
+		SetBorder(true)
+	refresh()
+
+	focusTable := func() {
+		u.terminal.SetFocus(table)
+	}
+	focusHeader := func() {
+		if excludeForm != nil {
+			u.terminal.SetFocus(excludeForm)
+			return
+		}
+		u.terminal.SetFocus(intervalForm)
+	}
+	intervalForm.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEsc:
+			u.showMain()
+			return nil
+		case tcell.KeyEnter:
+			next()
+			return nil
+		case tcell.KeyDown, tcell.KeyTab:
+			if excludeForm != nil {
+				u.terminal.SetFocus(excludeForm)
+			} else {
+				focusTable()
+			}
+			return nil
+		}
+		return event
+	})
+	if excludeForm != nil {
+		excludeForm.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			switch event.Key() {
+			case tcell.KeyEsc:
+				u.showMain()
+				return nil
+			case tcell.KeyBackspace, tcell.KeyBackspace2:
+				u.showNaming()
+				return nil
+			case tcell.KeyEnter:
+				next()
+				return nil
+			case tcell.KeyUp, tcell.KeyBacktab:
+				u.terminal.SetFocus(intervalForm)
+				return nil
+			case tcell.KeyDown, tcell.KeyTab:
+				focusTable()
+				return nil
+			case tcell.KeyLeft, tcell.KeyRight:
+				return tcell.NewEventKey(tcell.KeyRune, ' ', tcell.ModNone)
+			}
+			return event
+		})
+	}
+	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		row, _ := table.GetSelection()
+		switch event.Key() {
+		case tcell.KeyEsc:
+			u.showMain()
+			return nil
+		case tcell.KeyBackspace, tcell.KeyBackspace2:
+			u.showNaming()
+			return nil
+		case tcell.KeyEnter:
+			next()
+			return nil
+		case tcell.KeyBacktab:
+			focusHeader()
+			return nil
+		case tcell.KeyTab:
+			u.terminal.SetFocus(footer)
+			return nil
+		case tcell.KeyUp:
+			if row <= 1 {
+				focusHeader()
+				return nil
+			}
+		case tcell.KeyDown:
+			if row >= len(u.draft.Media.Chapters) {
+				u.terminal.SetFocus(footer)
+				return nil
+			}
+		case tcell.KeyLeft, tcell.KeyRight:
+			toggleChapter(row)
+			return nil
+		case tcell.KeyRune:
+			if event.Rune() == ' ' {
+				toggleChapter(row)
+				return nil
+			}
+		}
+		return event
+	})
+	footer.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		item, _ := footer.GetFocusedItemIndex()
+		if (event.Key() == tcell.KeyUp || event.Key() == tcell.KeyBacktab) && item == 0 {
+			u.terminal.SetFocus(table)
+			return nil
+		}
+		return formNavigation(footer, u.showNaming, u.showMain, nil)(event)
+	})
+	u.switchPage("chapters", layout)
 }
 
 func (u *UI) showAudio() {
@@ -714,17 +866,23 @@ func (u *UI) showQueueAt(selectedIndex int) {
 	currentProgress := u.currentProgress
 	currentETA := u.currentETA
 	lastRunError := u.lastRunError
+	snapshot := u.queueSnapshotLocked()
 	u.mu.Unlock()
 	for i, job := range q.Jobs {
 		job := job
 		prefix := fmt.Sprintf("%d.", i+1)
-		detail := fmt.Sprintf("chapter %d-%d", job.ChapterStart, job.ChapterEnd)
+		detail := fmt.Sprintf("約%s / chapter %d-%d", formatJobDuration(job), job.ChapterStart, job.ChapterEnd)
 		if running && job.ID == currentJobID {
-			prefix += fmt.Sprintf(" [実行中 %.1f%%]", currentProgress*100)
+			runLabel := "実行中"
+			if snapshot.encodingPaused {
+				runLabel = "一時停止"
+			}
+			prefix += fmt.Sprintf(" [%s %.1f%%]", runLabel, currentProgress*100)
 			detail = fmt.Sprintf(
-				"%s / ETA %s / chapter %d-%d",
+				"%s / ETA %s / 約%s / chapter %d-%d",
 				currentStage,
 				formatDuration(currentETA),
+				formatJobDuration(job),
 				job.ChapterStart,
 				job.ChapterEnd,
 			)
@@ -749,10 +907,13 @@ func (u *UI) showQueueAt(selectedIndex int) {
 	if selectedIndex >= 0 {
 		list.SetCurrentItem(selectedIndex)
 	}
+	u.queueSelection = selectedIndex
 	state := "待機中"
 	if running {
 		state = "実行中"
-		if exitAfterCurrent {
+		if snapshot.encodingPaused {
+			state = "エンコード一時停止中"
+		} else if exitAfterCurrent {
 			state = "現在ジョブ完了後に終了"
 		} else if pauseRequested {
 			state = "現在ジョブ後に一時停止"
@@ -762,10 +923,22 @@ func (u *UI) showQueueAt(selectedIndex int) {
 	} else if runSummary != "" {
 		state = runSummary
 	}
+	if eta, ok := estimateQueueETA(q, snapshot); ok {
+		state += " / 全体ETA 約" + formatDuration(eta)
+	}
 	list.SetChangedFunc(func(index int, _, _ string, _ rune) {
 		u.queueSelection = index
 	})
-	list.SetTitle(" キュー・実行状況 — " + state + " — ↑↓:選択 Enter:詳細 j:下へ移動 k:上へ移動 ←/BS/Esc:戻る ").SetBorder(true)
+	alert, alertErr := u.queueAlert()
+	title := " キュー・実行状況 — " + state + " — ↑↓:選択 Enter:詳細 j:下へ移動 k:上へ移動 ←/BS/Esc:戻る "
+	if alertErr != nil {
+		title = " キュー・実行状況 — 状態読込エラー: " + alertErr.Error() + " "
+		list.SetBorderColor(tcell.ColorRed)
+	} else if alert.Status == runstate.StatusFailed {
+		title = " キュー・実行状況 — 異常停止: " + alert.Message + " "
+		list.SetBorderColor(tcell.ColorRed)
+	}
+	list.SetTitle(title).SetBorder(true)
 	navigate := listNavigation(u.showMain, u.showMain)
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune && (event.Rune() == 'j' || event.Rune() == 'k') && len(q.Jobs) > 0 {
@@ -796,6 +969,7 @@ func (u *UI) showQueueJob(job queue.Job) {
 	currentStage := u.currentStage
 	currentProgress := u.currentProgress
 	currentETA := u.currentETA
+	encodingPaused := u.encodingPaused
 	lastRunError := u.lastRunError
 	exitAfterCurrent := u.exitAfterCurrent
 	u.mu.Unlock()
@@ -807,24 +981,39 @@ func (u *UI) showQueueJob(job queue.Job) {
 	active := running && currentJobID == job.ID
 	var text strings.Builder
 	if active {
+		status := "実行中"
+		if encodingPaused {
+			status = "エンコード一時停止中"
+		}
 		fmt.Fprintf(
 			&text,
-			"[yellow]実行中 %.1f%% / %s / ETA %s[white]\n\n",
+			"[yellow]%s %.1f%% / %s / ETA %s[white]\n\n",
+			status,
 			currentProgress*100,
 			currentStage,
 			formatDuration(currentETA),
 		)
-	} else if lastRunError != "" {
-		if head, ok := q.Peek(); ok && head.ID == job.ID {
+	} else if head, ok := q.Peek(); ok && head.ID == job.ID {
+		if lastRunError != "" {
 			fmt.Fprintf(&text, "[red]前回停止: %s[white]\n\n", lastRunError)
+		} else if alert, err := u.queueAlert(); err == nil && alert.Status == runstate.StatusFailed {
+			fmt.Fprintf(&text, "[red]前回異常停止: %s", alert.Message)
+			if alert.LogPath != "" {
+				fmt.Fprintf(&text, " / log: %s", alert.LogPath)
+			}
+			text.WriteString("[white]\n\n")
 		}
 	}
 	fmt.Fprintf(&text, "ID: %s\n", job.ID)
 	fmt.Fprintf(&text, "入力: %s\n", job.Input)
 	fmt.Fprintf(&text, "出力: %s\n", job.Output)
 	fmt.Fprintf(&text, "プリセット: %s\n", job.Preset)
+	if job.PresetFile != "" {
+		fmt.Fprintf(&text, "プリセットファイル: %s\n", job.PresetFile)
+	}
 	fmt.Fprintf(&text, "形式: %s\n", job.Container)
 	fmt.Fprintf(&text, "チャプター: %d-%d\n", job.ChapterStart, job.ChapterEnd)
+	fmt.Fprintf(&text, "動画時間: 約%s\n", formatJobDuration(job))
 	fmt.Fprintf(&text, "音声: %v\n", job.AudioTracks)
 	fmt.Fprintf(&text, "字幕: %v\n", job.Subtitles)
 	fmt.Fprintf(&text, "追加日時: %s\n", job.CreatedAt.Local().Format("2006-01-02 15:04:05"))
@@ -832,6 +1021,41 @@ func (u *UI) showQueueJob(job queue.Job) {
 	body := tview.NewTextView().SetDynamicColors(true).SetText(text.String())
 	form := tview.NewForm()
 	if active {
+		if currentStage == "handbrake" {
+			pauseLabel := "エンコードを一時停止"
+			if encodingPaused {
+				pauseLabel = "エンコードを再開"
+			}
+			form.AddButton(pauseLabel, func() {
+				var err error
+				u.mu.Lock()
+				paused := u.encodingPaused
+				u.mu.Unlock()
+				if paused {
+					err = u.runner.ResumeCurrent()
+				} else {
+					err = u.runner.PauseCurrent()
+				}
+				if err != nil {
+					u.showError("エンコード一時停止", err, func() { u.showQueueJob(job) })
+					return
+				}
+				u.mu.Lock()
+				now := time.Now()
+				if paused {
+					if !u.currentPausedAt.IsZero() {
+						u.currentPausedFor += now.Sub(u.currentPausedAt)
+					}
+					u.currentPausedAt = time.Time{}
+					u.encodingPaused = false
+				} else {
+					u.currentPausedAt = now
+					u.encodingPaused = true
+				}
+				u.mu.Unlock()
+				u.showQueueJob(job)
+			})
+		}
 		pauseLabel := "現在ジョブ後に一時停止"
 		if exitAfterCurrent {
 			pauseLabel = "終了予約を取り消す"
@@ -941,6 +1165,10 @@ func (u *UI) confirmDeleteQueueJob(job queue.Job) {
 				u.showError("キュー削除", err, u.showQueue)
 				return
 			}
+			if err := u.runner.DismissAlert(job.ID); err != nil {
+				u.showError("異常状態の解除", err, u.showQueue)
+				return
+			}
 			u.showQueue()
 		})
 	modal.SetTitle(" キュー削除 ")
@@ -985,6 +1213,12 @@ func (u *UI) startQueue() {
 	u.currentStage = "準備中"
 	u.currentProgress = 0
 	u.currentETA = 0
+	u.currentDuration = time.Duration(q.Jobs[0].DurationSeconds) * time.Second
+	u.currentStartedAt = time.Time{}
+	u.currentPausedAt = time.Time{}
+	u.currentPausedFor = 0
+	u.encodingPaused = false
+	u.speedFactor = 0
 	u.lastRunError = ""
 	u.mu.Unlock()
 
@@ -993,9 +1227,26 @@ func (u *UI) startQueue() {
 			u.mu.Lock()
 			u.currentJobID = jobID
 			u.currentStage = stage
-			if stage != "handbrake" {
+			if stage == "handbrake" && u.currentStartedAt.IsZero() {
+				u.currentStartedAt = time.Now()
+				u.currentPausedAt = time.Time{}
+				u.currentPausedFor = 0
+				u.encodingPaused = false
+				if q, err := u.service.Queue(); err == nil {
+					for _, job := range q.Jobs {
+						if job.ID == jobID {
+							u.currentDuration = time.Duration(job.DurationSeconds) * time.Second
+							break
+						}
+					}
+				}
+			} else if stage != "handbrake" {
 				u.currentProgress = 0
 				u.currentETA = 0
+				u.currentStartedAt = time.Time{}
+				u.currentPausedAt = time.Time{}
+				u.currentPausedFor = 0
+				u.encodingPaused = false
 			}
 			u.mu.Unlock()
 			u.refreshQueuePage()
@@ -1008,6 +1259,13 @@ func (u *UI) startQueue() {
 			u.currentStage = "handbrake"
 			u.currentProgress = progress.Fraction
 			u.currentETA = time.Duration(progress.ETASeconds) * time.Second
+			activeElapsed := time.Since(u.currentStartedAt) - u.currentPausedFor
+			if !u.currentPausedAt.IsZero() {
+				activeElapsed -= time.Since(u.currentPausedAt)
+			}
+			if progress.Fraction > 0 && u.currentDuration > 0 && activeElapsed > 0 {
+				u.speedFactor = float64(activeElapsed) / progress.Fraction / float64(u.currentDuration)
+			}
 			u.mu.Unlock()
 			u.refreshQueuePage()
 		})
@@ -1034,11 +1292,15 @@ func (u *UI) startQueue() {
 		remainingQueue, queueErr := u.service.Queue()
 		hasRemaining := queueErr == nil && len(remainingQueue.Jobs) > 0
 		runErrorText := ""
+		canceled := false
 		if runErr != nil {
 			runErrorText = runErr.Error()
 			var jobError *runner.JobError
-			if errors.As(runErr, &jobError) && jobError.LogPath != "" {
-				runErrorText += " / log: " + jobError.LogPath
+			if errors.As(runErr, &jobError) {
+				canceled = jobError.Canceled
+				if jobError.LogPath != "" {
+					runErrorText += " / log: " + jobError.LogPath
+				}
 			}
 		}
 		u.terminal.QueueUpdateDraw(func() {
@@ -1053,7 +1315,17 @@ func (u *UI) startQueue() {
 			u.currentStage = ""
 			u.currentProgress = 0
 			u.currentETA = 0
-			if runErr != nil {
+			u.currentDuration = 0
+			u.currentStartedAt = time.Time{}
+			u.currentPausedAt = time.Time{}
+			u.currentPausedFor = 0
+			u.encodingPaused = false
+			u.speedFactor = 0
+			if canceled {
+				u.queuePaused = true
+				u.runSummary = "即時中断により一時停止"
+				u.lastRunError = ""
+			} else if runErr != nil {
 				u.queuePaused = true
 				u.runSummary = "即時中断または失敗により一時停止"
 				u.lastRunError = runErrorText
@@ -1089,20 +1361,34 @@ func (u *UI) startQueueAutomatically(added int) {
 	paused := u.queuePaused
 	u.mu.Unlock()
 	if paused {
-		u.showMessage(
-			"キュー追加",
-			fmt.Sprintf("%d件を追加しました。キューは一時停止中です。", added),
-			u.showQueue,
-		)
+		u.mu.Lock()
+		u.runSummary = fmt.Sprintf("%d件追加（キューは一時停止中）", added)
+		u.mu.Unlock()
+		u.continueAdding()
 		return
 	}
-	u.startQueue()
+	u.mu.Lock()
+	running := u.running
+	u.mu.Unlock()
+	if !running {
+		u.startQueue()
+	}
+	u.continueAdding()
+}
+
+func (u *UI) continueAdding() {
+	u.addID++
+	u.adding = true
+	u.showFiles(filepath.Dir(u.draft.Input))
 }
 
 func (u *UI) refreshQueuePage() {
 	page, _ := u.pages.GetFrontPage()
-	if page == "queue" {
+	switch page {
+	case "queue":
 		u.showQueueAt(u.queueSelection)
+	case "main":
+		u.showMain()
 	}
 }
 
@@ -1132,6 +1418,114 @@ func (u *UI) captureGlobalInput(event *tcell.EventKey) *tcell.EventKey {
 
 func (u *UI) addActive(addID uint64) bool {
 	return u.adding && u.addID == addID
+}
+
+type queueSnapshot struct {
+	running         bool
+	currentJobID    string
+	currentStage    string
+	currentProgress float64
+	currentETA      time.Duration
+	encodingPaused  bool
+	speedFactor     float64
+}
+
+func (u *UI) queueSnapshotLocked() queueSnapshot {
+	return queueSnapshot{
+		running:         u.running,
+		currentJobID:    u.currentJobID,
+		currentStage:    u.currentStage,
+		currentProgress: u.currentProgress,
+		currentETA:      u.currentETA,
+		encodingPaused:  u.encodingPaused,
+		speedFactor:     u.speedFactor,
+	}
+}
+
+func (u *UI) queueAlert() (runstate.State, error) {
+	state, err := u.runner.Alert()
+	if err != nil {
+		return runstate.State{}, err
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if state.Status == runstate.StatusIdle && u.lastRunError != "" {
+		state.Status = runstate.StatusFailed
+		state.Message = u.lastRunError
+	}
+	return state, nil
+}
+
+func formatQueueOverview(q queue.Queue, snapshot queueSnapshot) string {
+	if len(q.Jobs) == 0 {
+		return "キューは空です"
+	}
+	var text strings.Builder
+	if eta, ok := estimateQueueETA(q, snapshot); ok {
+		fmt.Fprintf(&text, "[yellow]全体ETA 約%s[white]\n", formatDuration(eta))
+	}
+	for i, job := range q.Jobs {
+		status := "待機"
+		if snapshot.running && job.ID == snapshot.currentJobID {
+			status = fmt.Sprintf("実行中 %.1f%%", snapshot.currentProgress*100)
+			if snapshot.encodingPaused {
+				status = fmt.Sprintf("一時停止 %.1f%%", snapshot.currentProgress*100)
+			}
+		}
+		fmt.Fprintf(
+			&text,
+			"%2d. %-16s  約%-8s  %s\n",
+			i+1,
+			status,
+			formatJobDuration(job),
+			filepath.Base(job.Output),
+		)
+	}
+	return strings.TrimRight(text.String(), "\n")
+}
+
+func estimateQueueETA(q queue.Queue, snapshot queueSnapshot) (time.Duration, bool) {
+	if !snapshot.running || snapshot.speedFactor <= 0 {
+		return 0, false
+	}
+	current := -1
+	for i, job := range q.Jobs {
+		if job.ID == snapshot.currentJobID {
+			current = i
+			break
+		}
+	}
+	if current < 0 {
+		return 0, false
+	}
+	total := snapshot.currentETA
+	currentDuration := q.Jobs[current].DurationSeconds
+	switch snapshot.currentStage {
+	case "starting", "準備中", "validate", "create-output-directory", "prepare-output", "scan", "resolve-preset", "build-handbrake-args":
+		if currentDuration > 0 {
+			total += time.Duration(float64(time.Duration(currentDuration)*time.Second) * snapshot.speedFactor)
+		}
+	}
+	for _, job := range q.Jobs[current+1:] {
+		duration := job.DurationSeconds
+		if duration <= 0 {
+			duration = currentDuration
+		}
+		if duration > 0 {
+			total += time.Duration(float64(time.Duration(duration)*time.Second) * snapshot.speedFactor)
+		}
+	}
+	if total < 0 {
+		return 0, false
+	}
+	return total, true
+}
+
+func formatJobDuration(job queue.Job) string {
+	if job.DurationSeconds <= 0 {
+		return "--:--"
+	}
+	return formatDuration(time.Duration(job.DurationSeconds) * time.Second)
 }
 
 func (u *UI) showBusy(message string) {
