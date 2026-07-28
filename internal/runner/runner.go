@@ -16,6 +16,7 @@ import (
 	"chapterbrake/internal/metadata"
 	"chapterbrake/internal/process"
 	"chapterbrake/internal/queue"
+	"chapterbrake/internal/runstate"
 )
 
 type QueueStore interface {
@@ -39,6 +40,7 @@ type Runner struct {
 	Prober       MediaProber
 	LogDirectory string
 	AppLogger    *slog.Logger
+	State        *runstate.Store
 
 	HandBrake      string
 	FFmpeg         string
@@ -49,6 +51,13 @@ type Runner struct {
 	Stage          func(string, string)
 	Completed      func(string)
 	PauseRequested func() bool
+}
+
+type pausableExecutor interface {
+	process.Executor
+	Pause() error
+	Resume() error
+	IsPaused() bool
 }
 
 type Result struct {
@@ -62,6 +71,48 @@ type JobError struct {
 	LogPath  string
 	Canceled bool
 	Err      error
+}
+
+func (r *Runner) PauseCurrent() error {
+	executor, ok := r.Executor.(pausableExecutor)
+	if !ok {
+		return fmt.Errorf("current command executor does not support pause")
+	}
+	return executor.Pause()
+}
+
+func (r *Runner) ResumeCurrent() error {
+	executor, ok := r.Executor.(pausableExecutor)
+	if !ok {
+		return fmt.Errorf("current command executor does not support resume")
+	}
+	return executor.Resume()
+}
+
+func (r *Runner) CurrentPaused() bool {
+	executor, ok := r.Executor.(pausableExecutor)
+	return ok && executor.IsPaused()
+}
+
+func (r *Runner) Alert() (runstate.State, error) {
+	if r.State == nil {
+		return runstate.Idle(), nil
+	}
+	return r.State.Load()
+}
+
+func (r *Runner) DismissAlert(jobID string) error {
+	if r.State == nil {
+		return nil
+	}
+	state, err := r.State.Load()
+	if err != nil {
+		return err
+	}
+	if state.Status != runstate.StatusFailed || state.JobID != jobID {
+		return nil
+	}
+	return r.clearState()
 }
 
 func (e *JobError) Error() string {
@@ -89,7 +140,14 @@ func (r Runner) Run(ctx context.Context) (Result, error) {
 			return result, fmt.Errorf("claim queue head: %w", err)
 		}
 		if !ok {
+			if err := r.clearState(); err != nil {
+				return result, err
+			}
 			return result, nil
+		}
+		if err := r.markRunning(job, "starting"); err != nil {
+			_ = r.Store.ReleaseHead(job.ID)
+			return result, err
 		}
 		r.logInfo("job starting", "job_id", job.ID, "output", job.Output)
 
@@ -98,6 +156,11 @@ func (r Runner) Run(ctx context.Context) (Result, error) {
 			releaseErr := r.Store.ReleaseHead(job.ID)
 			err = errors.Join(err, releaseErr)
 			canceled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+			if canceled {
+				err = errors.Join(err, r.clearState())
+			} else {
+				err = errors.Join(err, r.markFailed(job, stage, logPath, err))
+			}
 			r.logError("job failed",
 				"job_id", job.ID,
 				"stage", stage,
@@ -116,7 +179,11 @@ func (r Runner) Run(ctx context.Context) (Result, error) {
 
 		if err := r.Store.CompleteHead(job.ID); err != nil {
 			err = errors.Join(err, r.Store.ReleaseHead(job.ID))
+			err = errors.Join(err, r.markFailed(job, "queue-save", logPath, err))
 			return result, &JobError{JobID: job.ID, Stage: "queue-save", LogPath: logPath, Err: err}
+		}
+		if err := r.clearState(); err != nil {
+			return result, err
 		}
 		result.Completed++
 		if r.Completed != nil {
@@ -124,6 +191,9 @@ func (r Runner) Run(ctx context.Context) (Result, error) {
 		}
 		r.logInfo("job completed", "job_id", job.ID, "output", job.Output, "log_path", logPath)
 		if r.PauseRequested != nil && r.PauseRequested() {
+			if err := r.clearState(); err != nil {
+				return result, err
+			}
 			result.Paused = true
 			return result, nil
 		}
@@ -138,6 +208,9 @@ func (r Runner) runJob(ctx context.Context, job queue.Job) (logPath string, stag
 		}
 	}
 	setStage("validate")
+	if err := os.MkdirAll(filepath.Dir(job.Output), 0o755); err != nil {
+		return "", "create-output-directory", fmt.Errorf("create output directory: %w", err)
+	}
 	if err := validateRuntimePaths(job); err != nil {
 		return "", stage, err
 	}
@@ -180,7 +253,7 @@ func (r Runner) runJob(ctx context.Context, job queue.Job) (logPath string, stag
 	if err != nil {
 		return logPath, stage, err
 	}
-	preset, err := handbrake.ResolveQueuedPreset(job.Preset, job.Container)
+	preset, err := handbrake.ResolveQueuedPreset(job.Preset, job.Container, job.PresetFile)
 	if err != nil {
 		setStage("resolve-preset")
 		return logPath, stage, err
@@ -453,4 +526,34 @@ func (r Runner) logError(message string, args ...any) {
 	if r.AppLogger != nil {
 		r.AppLogger.Error(message, args...)
 	}
+}
+
+func (r Runner) markRunning(job queue.Job, stage string) error {
+	if r.State == nil {
+		return nil
+	}
+	if err := r.State.MarkRunning(job, stage, r.now()); err != nil {
+		return fmt.Errorf("record running job state: %w", err)
+	}
+	return nil
+}
+
+func (r Runner) markFailed(job queue.Job, stage, logPath string, runErr error) error {
+	if r.State == nil {
+		return nil
+	}
+	if err := r.State.MarkFailed(job, stage, runErr.Error(), logPath, r.now()); err != nil {
+		return fmt.Errorf("record failed job state: %w", err)
+	}
+	return nil
+}
+
+func (r Runner) clearState() error {
+	if r.State == nil {
+		return nil
+	}
+	if err := r.State.Clear(); err != nil {
+		return fmt.Errorf("clear running job state: %w", err)
+	}
+	return nil
 }

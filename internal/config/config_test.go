@@ -22,6 +22,20 @@ func TestDataDirectory(t *testing.T) {
 	}
 }
 
+func TestLogDirectory(t *testing.T) {
+	got, err := LogDirectory("/Users/example")
+	if err != nil {
+		t.Fatalf("LogDirectory() error = %v", err)
+	}
+	want := filepath.Join("/Users/example", "Library", "Logs", "ChapterBrake")
+	if got != want {
+		t.Fatalf("LogDirectory() = %q, want %q", got, want)
+	}
+	if _, err := LogDirectory("relative"); err == nil {
+		t.Fatal("LogDirectory(relative) error = nil")
+	}
+}
+
 func TestDefaultSettings(t *testing.T) {
 	got := DefaultSettings()
 	want := Settings{

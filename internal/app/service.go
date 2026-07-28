@@ -208,17 +208,23 @@ func (s *Service) BuildPreview(draft Draft) (Preview, error) {
 	jobs := make([]queue.Job, len(ranges))
 	var collisions []string
 	for i, chapterRange := range ranges {
+		duration, err := chapterRange.ApproximateDuration(draft.Media.Chapters, draft.Media.Duration)
+		if err != nil {
+			return Preview{}, fmt.Errorf("calculate job %d duration: %w", i+1, err)
+		}
 		jobs[i] = queue.Job{
-			ID:           s.nextID(now, i),
-			CreatedAt:    now,
-			Input:        draft.Input,
-			Output:       outputs[i],
-			Preset:       draft.Preset.DisplayName,
-			Container:    draft.Preset.Container,
-			ChapterStart: chapterRange.Start,
-			ChapterEnd:   chapterRange.End,
-			AudioTracks:  append([]int{}, draft.AudioTracks...),
-			Subtitles:    append([]int{}, draft.Subtitles...),
+			ID:              s.nextID(now, i),
+			CreatedAt:       now,
+			Input:           draft.Input,
+			Output:          outputs[i],
+			Preset:          draft.Preset.DisplayName,
+			PresetFile:      draft.Preset.ImportFile,
+			Container:       draft.Preset.Container,
+			ChapterStart:    chapterRange.Start,
+			ChapterEnd:      chapterRange.End,
+			DurationSeconds: int64(duration.Round(time.Second) / time.Second),
+			AudioTracks:     append([]int{}, draft.AudioTracks...),
+			Subtitles:       append([]int{}, draft.Subtitles...),
 		}
 		if err := jobs[i].Validate(); err != nil {
 			return Preview{}, fmt.Errorf("job %d: %w", i+1, err)
@@ -258,11 +264,6 @@ func (s *Service) AddPreview(preview Preview, overwriteApproved bool) error {
 	}
 	if len(preview.Collisions) > 0 && !overwriteApproved {
 		return fmt.Errorf("%d existing outputs require explicit overwrite approval", len(preview.Collisions))
-	}
-	for _, job := range preview.Jobs {
-		if err := os.MkdirAll(filepath.Dir(job.Output), 0o755); err != nil {
-			return fmt.Errorf("create output directory: %w", err)
-		}
 	}
 	return s.QueueStore.AppendJobs(preview.Jobs...)
 }

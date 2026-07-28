@@ -20,7 +20,8 @@ func TestOSExecutorRun(t *testing.T) {
 	t.Run("success preserves separate streams", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		err := (OSExecutor{}).Run(
+		executor := &OSExecutor{}
+		err := executor.Run(
 			context.Background(),
 			Invocation{Executable: executable, Args: []string{"-test.run=TestProcessHelper", "--", "success"}},
 			&stdout,
@@ -38,7 +39,8 @@ func TestOSExecutorRun(t *testing.T) {
 	})
 
 	t.Run("exit error", func(t *testing.T) {
-		err := (OSExecutor{}).Run(
+		executor := &OSExecutor{}
+		err := executor.Run(
 			context.Background(),
 			Invocation{Executable: executable, Args: []string{"-test.run=TestProcessHelper", "--", "failure"}},
 			nil,
@@ -57,7 +59,8 @@ func TestOSExecutorRun(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 		start := time.Now()
-		err := (OSExecutor{InterruptGrace: time.Second}).Run(
+		executor := &OSExecutor{InterruptGrace: time.Second}
+		err := executor.Run(
 			ctx,
 			Invocation{Executable: executable, Args: []string{"-test.run=TestProcessHelper", "--", "wait"}},
 			nil,
@@ -75,12 +78,62 @@ func TestOSExecutorRun(t *testing.T) {
 	t.Run("already canceled does not start", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		err := (OSExecutor{}).Run(ctx, Invocation{Executable: executable}, nil, nil)
+		executor := &OSExecutor{}
+		err := executor.Run(ctx, Invocation{Executable: executable}, nil, nil)
 		var commandErr *Error
 		if !errors.As(err, &commandErr) || !commandErr.Canceled {
 			t.Fatalf("Run() error = %T %v", err, err)
 		}
 	})
+}
+
+func TestOSExecutorPauseAndResume(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &OSExecutor{InterruptGrace: time.Second}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- executor.Run(
+			ctx,
+			Invocation{Executable: executable, Args: []string{"-test.run=TestProcessHelper", "--", "wait"}},
+			nil,
+			nil,
+		)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err = executor.Pause()
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Pause() did not observe running command: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !executor.IsPaused() {
+		t.Fatal("IsPaused() = false after Pause()")
+	}
+	if err := executor.Resume(); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if executor.IsPaused() {
+		t.Fatal("IsPaused() = true after Resume()")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		var commandErr *Error
+		if !errors.As(err, &commandErr) || !commandErr.Canceled {
+			t.Fatalf("Run() error = %v, want canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not stop after resumed cancellation")
+	}
 }
 
 func TestInvocationValidate(t *testing.T) {

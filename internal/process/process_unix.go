@@ -31,6 +31,22 @@ func killProcessGroup(pid int) error {
 	return err
 }
 
+func stopProcessGroup(pid int) error {
+	err := syscall.Kill(-pid, syscall.SIGSTOP)
+	if errors.Is(err, syscall.ESRCH) {
+		return errProcessDone
+	}
+	return err
+}
+
+func continueProcessGroup(pid int) error {
+	err := syscall.Kill(-pid, syscall.SIGCONT)
+	if errors.Is(err, syscall.ESRCH) {
+		return errProcessDone
+	}
+	return err
+}
+
 func exitSignal(exitErr *exec.ExitError) string {
 	status, ok := exitErr.Sys().(syscall.WaitStatus)
 	if !ok || !status.Signaled() {

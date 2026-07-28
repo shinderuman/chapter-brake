@@ -22,9 +22,13 @@ type Catalog struct {
 	Executor      process.Executor
 	HandBrake     string
 	TempDirectory string
+	MyPresets     []Preset
 }
 
 func (c Catalog) Curated() []Preset {
+	if len(c.MyPresets) > 0 {
+		return append([]Preset(nil), c.MyPresets...)
+	}
 	return CuratedPresets()
 }
 
@@ -83,6 +87,11 @@ func (c Catalog) Resolve(
 	stdout io.Writer,
 	stderr io.Writer,
 ) (Preset, error) {
+	for _, preset := range c.Curated() {
+		if preset.DisplayName == displayName {
+			return preset, nil
+		}
+	}
 	if preset, ok := resolveCuratedPreset(displayName); ok {
 		return preset, nil
 	}

@@ -243,14 +243,17 @@ func TestBuildAndAddPreview(t *testing.T) {
 	if preview.Jobs[0].ChapterStart != 2 || preview.Jobs[0].ChapterEnd != 2 {
 		t.Fatalf("first job chapters = %d-%d", preview.Jobs[0].ChapterStart, preview.Jobs[0].ChapterEnd)
 	}
+	if preview.Jobs[0].DurationSeconds != 1431 || preview.Jobs[1].DurationSeconds != 30 {
+		t.Fatalf("job durations = %d, %d", preview.Jobs[0].DurationSeconds, preview.Jobs[1].DurationSeconds)
+	}
 	if err := service.AddPreview(preview, false); err == nil {
 		t.Fatal("AddPreview(without approval) error = nil")
 	}
 	if err := service.AddPreview(preview, true); err != nil {
 		t.Fatalf("AddPreview() error = %v", err)
 	}
-	if info, err := os.Stat(outputDirectory); err != nil || !info.IsDir() {
-		t.Fatalf("output title directory was not created: %v", err)
+	if _, err := os.Stat(outputDirectory); err != nil {
+		t.Fatalf("existing output directory changed unexpectedly: %v", err)
 	}
 	if len(store.q.Jobs) != 2 {
 		t.Fatalf("queue jobs = %d", len(store.q.Jobs))
@@ -260,6 +263,26 @@ func TestBuildAndAddPreview(t *testing.T) {
 	}
 	if len(store.q.Jobs) != 1 {
 		t.Fatalf("queue jobs after delete = %d", len(store.q.Jobs))
+	}
+}
+
+func TestAddPreviewDoesNotCreateOutputDirectory(t *testing.T) {
+	service, draft, store := testService(t)
+	draft.Preset = handbrake.CuratedPresets()[1]
+	draft.StartIndex = 1
+	outputDirectory := filepath.Join(service.OutputDirectory, draft.Base)
+	preview, err := service.BuildPreview(draft)
+	if err != nil {
+		t.Fatalf("BuildPreview() error = %v", err)
+	}
+	if err := service.AddPreview(preview, true); err != nil {
+		t.Fatalf("AddPreview() error = %v", err)
+	}
+	if _, err := os.Stat(outputDirectory); !os.IsNotExist(err) {
+		t.Fatalf("output directory exists before execution: %v", err)
+	}
+	if len(store.q.Jobs) == 0 {
+		t.Fatal("queue was not updated")
 	}
 }
 

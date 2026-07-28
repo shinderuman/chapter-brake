@@ -21,6 +21,7 @@ import (
 	"chapterbrake/internal/process"
 	"chapterbrake/internal/queue"
 	"chapterbrake/internal/runner"
+	"chapterbrake/internal/runstate"
 	"chapterbrake/internal/tui"
 )
 
@@ -34,6 +35,7 @@ type dependencies struct {
 	absolutePath  func(string) (string, error)
 	now           func() time.Time
 	executor      process.Executor
+	jobExecutor   process.Executor
 	inspectTools  func(context.Context, process.Executor) ([]app.ToolInfo, error)
 	newTerminal   func(*app.Service, *runner.Runner, string) (terminal, error)
 }
@@ -83,7 +85,8 @@ func productionDependencies() dependencies {
 		homeDirectory: os.UserHomeDir,
 		absolutePath:  filepath.Abs,
 		now:           time.Now,
-		executor:      process.OSExecutor{},
+		executor:      &process.OSExecutor{},
+		jobExecutor:   &process.OSExecutor{},
 		inspectTools:  app.InspectTools,
 		newTerminal: func(
 			service *app.Service,
@@ -101,6 +104,10 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 	dataDirectory, err := config.DataDirectory(home)
+	if err != nil {
+		return err
+	}
+	logDirectory, err := config.LogDirectory(home)
 	if err != nil {
 		return err
 	}
@@ -139,8 +146,11 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 	if _, err := queueStore.LoadOrCreate(); err != nil {
 		return err
 	}
+	stateStore := &runstate.Store{Path: filepath.Join(dataDirectory, "state.json")}
+	if _, err := stateStore.RecoverInterrupted(deps.now()); err != nil {
+		return err
+	}
 
-	logDirectory := filepath.Join(dataDirectory, "logs")
 	appLogger, appLogCloser, appLogPath, err := logging.OpenApp(logDirectory, deps.now())
 	if err != nil {
 		return err
@@ -167,15 +177,29 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 	mkvPropEditPath := app.ToolPath(tools, "mkvpropedit")
 
 	scanner := media.Scanner{Executor: deps.executor, HandBrake: handBrakePath}
-	catalog := handbrake.Catalog{Executor: deps.executor, HandBrake: handBrakePath}
+	presetPath := filepath.Join(dataDirectory, "My Presets.json")
+	myPresets, err := handbrake.LoadPresetFileOrDefaults(presetPath)
+	if err != nil {
+		return err
+	}
+	catalog := handbrake.Catalog{
+		Executor:  deps.executor,
+		HandBrake: handBrakePath,
+		MyPresets: myPresets,
+	}
 	prober := metadata.Prober{Executor: deps.executor, FFProbe: ffprobePath}
+	jobExecutor := deps.jobExecutor
+	if jobExecutor == nil {
+		jobExecutor = deps.executor
+	}
 	queueRunner := &runner.Runner{
 		Store:        queueStore,
-		Executor:     deps.executor,
+		Executor:     jobExecutor,
 		Scanner:      scanner,
 		Prober:       prober,
 		LogDirectory: logDirectory,
 		AppLogger:    appLogger,
+		State:        stateStore,
 		HandBrake:    handBrakePath,
 		FFmpeg:       ffmpegPath,
 		FFProbe:      ffprobePath,

@@ -1,6 +1,8 @@
 package handbrake
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -104,6 +106,42 @@ func TestParseExportedPreset(t *testing.T) {
 				t.Fatalf("ParseExportedPreset() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadPresetFileReadsGUIFolderExport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "My Presets.json")
+	data := []byte(`{"PresetList":[{
+		"PresetName":"My Presets","Folder":true,"ChildrenArray":[
+			{"PresetName":"MP4 Presets","FileFormat":"av_mp4","Folder":false,"PictureWidth":1920,"PictureHeight":1080,"PictureCropMode":0},
+			{"PresetName":"MKV Presets","FileFormat":"av_mkv","Folder":false,"PictureWidth":720,"PictureHeight":480,"PictureCropMode":2}
+		]
+	}]}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadPresetFile(path)
+	if err != nil {
+		t.Fatalf("LoadPresetFile() error = %v", err)
+	}
+	if len(got) != 2 || got[0].DisplayName != "MP4 Presets" || got[1].Container != queue.ContainerMKV {
+		t.Fatalf("LoadPresetFile() = %#v", got)
+	}
+	if got[0].Summary != "1920x1080・MP4・自動クロップ" ||
+		got[1].Summary != "720x480・MKV・クロップなし" {
+		t.Fatalf("imported summaries = %q, %q", got[0].Summary, got[1].Summary)
+	}
+	for _, preset := range got {
+		if preset.ImportFile != path || !preset.ChapterBrakeOwned {
+			t.Fatalf("imported preset = %#v", preset)
+		}
+	}
+	resolved, err := ResolveQueuedPreset("MKV Presets", queue.ContainerMKV, path)
+	if err != nil || resolved.ImportFile != path {
+		t.Fatalf("ResolveQueuedPreset(imported) = %#v, %v", resolved, err)
+	}
+	if _, err := ResolveQueuedPreset("missing", queue.ContainerMKV, path); err == nil {
+		t.Fatal("ResolveQueuedPreset(missing imported preset) error = nil")
 	}
 }
 
@@ -256,6 +294,26 @@ func TestEncodeArgsUsesCuratedCropMode(t *testing.T) {
 	}
 	if !containsPair(got, "--crop-mode", "none") {
 		t.Fatalf("EncodeArgs() crop mode = %q", got)
+	}
+}
+
+func TestEncodeArgsImportsGUIPresetFile(t *testing.T) {
+	job := encodeJob()
+	job.PresetFile = "/settings/My Presets.json"
+	preset := CuratedPresets()[1]
+	preset.ImportFile = job.PresetFile
+	preset.CropMode = ""
+	got, err := EncodeArgs(
+		job,
+		"/output/.chapterbrake-job-1-encode.mkv",
+		preset,
+		[]media.AudioTrack{{Number: 1, Codec: "AC3", Channels: 6}, {Number: 2, Codec: "AAC", Channels: 2}},
+	)
+	if err != nil {
+		t.Fatalf("EncodeArgs() error = %v", err)
+	}
+	if !containsPair(got, "--preset-import-file", job.PresetFile) {
+		t.Fatalf("EncodeArgs() = %q", got)
 	}
 }
 

@@ -90,7 +90,12 @@ func TestRunBuildsApplication(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDirectory, "queue.json")); err != nil {
 		t.Fatalf("queue.json: %v", err)
 	}
-	logs, err := filepath.Glob(filepath.Join(dataDirectory, "logs", "app-*.log"))
+	home := filepath.Dir(filepath.Dir(dataDirectory))
+	logDirectory, err := config.LogDirectory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs, err := filepath.Glob(filepath.Join(logDirectory, "app-*.log"))
 	if err != nil || len(logs) != 1 {
 		t.Fatalf("app logs = %v, %v", logs, err)
 	}

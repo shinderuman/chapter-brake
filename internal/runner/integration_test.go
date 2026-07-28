@@ -32,7 +32,7 @@ func TestRealToolchainIntegration(t *testing.T) {
 		}
 	}
 
-	toolExecutor := process.OSExecutor{InterruptGrace: 3 * time.Second}
+	toolExecutor := &process.OSExecutor{InterruptGrace: 3 * time.Second}
 	for _, container := range []queue.Container{queue.ContainerMKV, queue.ContainerMP4} {
 		t.Run(string(container), func(t *testing.T) {
 			root := os.Getenv("CHAPTERBRAKE_ACCEPTANCE_OUTPUT")

@@ -2,7 +2,10 @@ package handbrake
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"chapterbrake/internal/queue"
@@ -12,6 +15,7 @@ type Preset struct {
 	DisplayName       string
 	Summary           string
 	HandBrakeName     string
+	ImportFile        string
 	Container         queue.Container
 	CropMode          string
 	ChapterBrakeOwned bool
@@ -61,6 +65,9 @@ func (p Preset) Validate() error {
 	if strings.TrimSpace(p.HandBrakeName) == "" {
 		return fmt.Errorf("HandBrake preset name must not be empty")
 	}
+	if p.ImportFile != "" && !filepath.IsAbs(p.ImportFile) {
+		return fmt.Errorf("preset import file must be absolute: %q", p.ImportFile)
+	}
 	if p.Container != queue.ContainerMKV && p.Container != queue.ContainerMP4 {
 		return fmt.Errorf("unsupported preset container %q", p.Container)
 	}
@@ -70,7 +77,31 @@ func (p Preset) Validate() error {
 	return nil
 }
 
-func ResolveQueuedPreset(name string, container queue.Container) (Preset, error) {
+func ResolveQueuedPreset(name string, container queue.Container, presetFiles ...string) (Preset, error) {
+	if len(presetFiles) > 1 {
+		return Preset{}, fmt.Errorf("at most one preset file may be specified")
+	}
+	if len(presetFiles) == 1 && presetFiles[0] != "" {
+		presets, err := LoadPresetFile(presetFiles[0])
+		if err != nil {
+			return Preset{}, err
+		}
+		for _, preset := range presets {
+			if preset.DisplayName != name {
+				continue
+			}
+			if preset.Container != container {
+				return Preset{}, fmt.Errorf(
+					"queued container %q does not match imported preset %q container %q",
+					container,
+					name,
+					preset.Container,
+				)
+			}
+			return preset, nil
+		}
+		return Preset{}, fmt.Errorf("preset %q does not exist in %s", name, presetFiles[0])
+	}
 	if preset, ok := resolveCuratedPreset(name); ok {
 		if preset.Container != container {
 			return Preset{}, fmt.Errorf(
@@ -91,6 +122,29 @@ func ResolveQueuedPreset(name string, container queue.Container) (Preset, error)
 		return Preset{}, err
 	}
 	return preset, nil
+}
+
+func LoadPresetFile(path string) ([]Preset, error) {
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("preset file must be absolute: %q", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read preset file %s: %w", path, err)
+	}
+	presets, err := ParseExportedPresets(data, path)
+	if err != nil {
+		return nil, fmt.Errorf("parse preset file %s: %w", path, err)
+	}
+	return presets, nil
+}
+
+func LoadPresetFileOrDefaults(path string) ([]Preset, error) {
+	presets, err := LoadPresetFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return CuratedPresets(), nil
+	}
+	return presets, err
 }
 
 func resolveCuratedPreset(name string) (Preset, bool) {
@@ -124,12 +178,13 @@ type presetNode struct {
 	PresetName    string       `json:"PresetName"`
 	FileFormat    string       `json:"FileFormat"`
 	Folder        bool         `json:"Folder"`
+	PictureWidth  int          `json:"PictureWidth"`
+	PictureHeight int          `json:"PictureHeight"`
+	PictureCrop   *int         `json:"PictureCropMode"`
 	ChildrenArray []presetNode `json:"ChildrenArray"`
 }
 
-// ParseExportedPreset reads HandBrake's preset export JSON. It requires exactly
-// one non-folder preset so callers cannot silently select the wrong node.
-func ParseExportedPreset(data []byte, displayName string) (Preset, error) {
+func parsePresetDocument(data []byte) (presetDocument, error) {
 	var document presetDocument
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
@@ -141,18 +196,21 @@ func ParseExportedPreset(data []byte, displayName string) (Preset, error) {
 			PresetList []json.RawMessage `json:"PresetList"`
 		}
 		if rawErr := json.Unmarshal(data, &raw); rawErr != nil {
-			return Preset{}, fmt.Errorf("decode preset export: %w", err)
+			return presetDocument{}, fmt.Errorf("decode preset export: %w", err)
 		}
 		document.PresetList = make([]presetNode, 0, len(raw.PresetList))
 		for _, item := range raw.PresetList {
 			var node presetNode
 			if rawErr := json.Unmarshal(item, &node); rawErr != nil {
-				return Preset{}, fmt.Errorf("decode preset node: %w", rawErr)
+				return presetDocument{}, fmt.Errorf("decode preset node: %w", rawErr)
 			}
 			document.PresetList = append(document.PresetList, node)
 		}
 	}
+	return document, nil
+}
 
+func presetLeaves(document presetDocument) []presetNode {
 	var leaves []presetNode
 	var collect func([]presetNode)
 	collect = func(nodes []presetNode) {
@@ -165,6 +223,73 @@ func ParseExportedPreset(data []byte, displayName string) (Preset, error) {
 		}
 	}
 	collect(document.PresetList)
+	return leaves
+}
+
+// ParseExportedPresets reads all non-folder presets in a HandBrake GUI export.
+func ParseExportedPresets(data []byte, importFile string) ([]Preset, error) {
+	if importFile != "" && !filepath.IsAbs(importFile) {
+		return nil, fmt.Errorf("preset import file must be absolute: %q", importFile)
+	}
+	document, err := parsePresetDocument(data)
+	if err != nil {
+		return nil, err
+	}
+	leaves := presetLeaves(document)
+	if len(leaves) == 0 {
+		return nil, fmt.Errorf("preset export contains no leaf presets")
+	}
+	presets := make([]Preset, 0, len(leaves))
+	seen := make(map[string]struct{}, len(leaves))
+	for _, leaf := range leaves {
+		if _, duplicate := seen[leaf.PresetName]; duplicate {
+			return nil, fmt.Errorf("preset export contains duplicate preset name %q", leaf.PresetName)
+		}
+		seen[leaf.PresetName] = struct{}{}
+		container, err := containerFromFileFormat(leaf.FileFormat)
+		if err != nil {
+			return nil, fmt.Errorf("preset %q: %w", leaf.PresetName, err)
+		}
+		preset := Preset{
+			DisplayName:       leaf.PresetName,
+			Summary:           importedPresetSummary(leaf, container),
+			HandBrakeName:     leaf.PresetName,
+			ImportFile:        importFile,
+			Container:         container,
+			ChapterBrakeOwned: true,
+		}
+		if err := preset.Validate(); err != nil {
+			return nil, err
+		}
+		presets = append(presets, preset)
+	}
+	return presets, nil
+}
+
+func importedPresetSummary(node presetNode, container queue.Container) string {
+	parts := make([]string, 0, 3)
+	if node.PictureWidth > 0 && node.PictureHeight > 0 {
+		parts = append(parts, fmt.Sprintf("%dx%d", node.PictureWidth, node.PictureHeight))
+	}
+	parts = append(parts, strings.ToUpper(string(container)))
+	if node.PictureCrop != nil {
+		switch *node.PictureCrop {
+		case 0:
+			parts = append(parts, "自動クロップ")
+		case 2:
+			parts = append(parts, "クロップなし")
+		}
+	}
+	return strings.Join(parts, "・")
+}
+
+// ParseExportedPreset reads a HandBrake export containing exactly one preset.
+func ParseExportedPreset(data []byte, displayName string) (Preset, error) {
+	document, err := parsePresetDocument(data)
+	if err != nil {
+		return Preset{}, err
+	}
+	leaves := presetLeaves(document)
 	if len(leaves) != 1 {
 		return Preset{}, fmt.Errorf("preset export contains %d leaf presets, want 1", len(leaves))
 	}

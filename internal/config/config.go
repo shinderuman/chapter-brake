@@ -44,6 +44,13 @@ func DataDirectory(home string) (string, error) {
 	return filepath.Join(home, "Documents", "ChapterBrake"), nil
 }
 
+func LogDirectory(home string) (string, error) {
+	if !filepath.IsAbs(home) {
+		return "", fmt.Errorf("home directory must be absolute: %q", home)
+	}
+	return filepath.Join(home, "Library", "Logs", "ChapterBrake"), nil
+}
+
 func (s Settings) Validate() error {
 	if s.Version != Version {
 		return fmt.Errorf("unsupported settings version %d", s.Version)

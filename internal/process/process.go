@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -27,6 +28,10 @@ type Executor interface {
 
 type OSExecutor struct {
 	InterruptGrace time.Duration
+
+	mu     sync.Mutex
+	pid    int
+	paused bool
 }
 
 type Error struct {
@@ -54,7 +59,7 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
-func (e OSExecutor) Run(
+func (e *OSExecutor) Run(
 	ctx context.Context,
 	invocation Invocation,
 	stdout io.Writer,
@@ -80,6 +85,12 @@ func (e OSExecutor) Run(
 	if err := command.Start(); err != nil {
 		return &Error{Invocation: invocation, ExitCode: -1, Err: err}
 	}
+	if err := e.setActive(command.Process.Pid); err != nil {
+		_ = killProcessGroup(command.Process.Pid)
+		_ = command.Wait()
+		return &Error{Invocation: invocation, ExitCode: -1, Err: err}
+	}
+	defer e.clearActive(command.Process.Pid)
 
 	waited := make(chan error, 1)
 	go func() {
@@ -90,6 +101,7 @@ func (e OSExecutor) Run(
 	case err := <-waited:
 		return commandError(invocation, err, false)
 	case <-ctx.Done():
+		_ = e.resumeForStop(command.Process.Pid)
 		if err := interruptProcessGroup(command.Process.Pid); err != nil && !errors.Is(err, errProcessDone) {
 			_ = killProcessGroup(command.Process.Pid)
 		}
@@ -110,6 +122,75 @@ func (e OSExecutor) Run(
 			return commandError(invocation, errors.Join(ctx.Err(), killErr, err), true)
 		}
 	}
+}
+
+func (e *OSExecutor) Pause() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pid == 0 {
+		return fmt.Errorf("no command is running")
+	}
+	if e.paused {
+		return nil
+	}
+	if err := stopProcessGroup(e.pid); err != nil {
+		return fmt.Errorf("pause process group: %w", err)
+	}
+	e.paused = true
+	return nil
+}
+
+func (e *OSExecutor) Resume() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pid == 0 {
+		return fmt.Errorf("no command is running")
+	}
+	if !e.paused {
+		return nil
+	}
+	if err := continueProcessGroup(e.pid); err != nil {
+		return fmt.Errorf("resume process group: %w", err)
+	}
+	e.paused = false
+	return nil
+}
+
+func (e *OSExecutor) IsPaused() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.paused
+}
+
+func (e *OSExecutor) setActive(pid int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pid != 0 {
+		return fmt.Errorf("executor already has a running command")
+	}
+	e.pid = pid
+	e.paused = false
+	return nil
+}
+
+func (e *OSExecutor) clearActive(pid int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pid == pid {
+		e.pid = 0
+		e.paused = false
+	}
+}
+
+func (e *OSExecutor) resumeForStop(pid int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pid != pid || !e.paused {
+		return nil
+	}
+	err := continueProcessGroup(pid)
+	e.paused = false
+	return err
 }
 
 func commandError(invocation Invocation, err error, canceled bool) error {

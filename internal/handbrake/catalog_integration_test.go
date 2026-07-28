@@ -20,7 +20,7 @@ func TestRealCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := Catalog{
-		Executor:  process.OSExecutor{},
+		Executor:  &process.OSExecutor{},
 		HandBrake: path,
 	}
 	presets, err := catalog.ListStandard(context.Background(), io.Discard, io.Discard)

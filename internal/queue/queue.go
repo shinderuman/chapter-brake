@@ -20,16 +20,18 @@ const (
 var jobIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type Job struct {
-	ID           string    `json:"id"`
-	CreatedAt    time.Time `json:"created_at"`
-	Input        string    `json:"input"`
-	Output       string    `json:"output"`
-	Preset       string    `json:"preset"`
-	Container    Container `json:"container"`
-	ChapterStart int       `json:"chapter_start"`
-	ChapterEnd   int       `json:"chapter_end"`
-	AudioTracks  []int     `json:"audio_tracks"`
-	Subtitles    []int     `json:"subtitles"`
+	ID              string    `json:"id"`
+	CreatedAt       time.Time `json:"created_at"`
+	Input           string    `json:"input"`
+	Output          string    `json:"output"`
+	Preset          string    `json:"preset"`
+	PresetFile      string    `json:"preset_file,omitempty"`
+	Container       Container `json:"container"`
+	ChapterStart    int       `json:"chapter_start"`
+	ChapterEnd      int       `json:"chapter_end"`
+	DurationSeconds int64     `json:"duration_seconds,omitempty"`
+	AudioTracks     []int     `json:"audio_tracks"`
+	Subtitles       []int     `json:"subtitles"`
 }
 
 type Queue struct {
@@ -84,6 +86,9 @@ func (j Job) Validate() error {
 	if strings.TrimSpace(j.Preset) == "" {
 		return fmt.Errorf("preset must not be empty")
 	}
+	if j.PresetFile != "" && !filepath.IsAbs(j.PresetFile) {
+		return fmt.Errorf("preset_file must be absolute: %q", j.PresetFile)
+	}
 	if j.Container != ContainerMKV && j.Container != ContainerMP4 {
 		return fmt.Errorf("unsupported container %q", j.Container)
 	}
@@ -92,6 +97,9 @@ func (j Job) Validate() error {
 	}
 	if j.ChapterStart < 1 || j.ChapterEnd < j.ChapterStart {
 		return fmt.Errorf("invalid chapter range %d-%d", j.ChapterStart, j.ChapterEnd)
+	}
+	if j.DurationSeconds < 0 {
+		return fmt.Errorf("duration_seconds must not be negative")
 	}
 	if err := validateTrackNumbers("audio_tracks", j.AudioTracks, true, 2); err != nil {
 		return err

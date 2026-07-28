@@ -16,6 +16,7 @@ import (
 	"chapterbrake/internal/metadata"
 	"chapterbrake/internal/process"
 	"chapterbrake/internal/queue"
+	"chapterbrake/internal/runstate"
 )
 
 type memoryStore struct {
@@ -269,6 +270,11 @@ func newTestRunner(t *testing.T, job queue.Job) (Runner, *memoryStore, *fakeExec
 func TestRunnerMKVSuccessRemovesHeadOnlyAfterPublish(t *testing.T) {
 	job := testJob(t, queue.ContainerMKV)
 	runner, store, executor, _ := newTestRunner(t, job)
+	stateStore := &runstate.Store{Path: filepath.Join(t.TempDir(), "state.json")}
+	if _, err := stateStore.LoadOrCreate(); err != nil {
+		t.Fatal(err)
+	}
+	runner.State = stateStore
 	result, err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -298,6 +304,29 @@ func TestRunnerMKVSuccessRemovesHeadOnlyAfterPublish(t *testing.T) {
 		filepath.Base(executor.invocations[0].Executable) != "HandBrakeCLI" ||
 		filepath.Base(executor.invocations[1].Executable) != "mkvpropedit" {
 		t.Fatalf("invocations = %#v", executor.invocations)
+	}
+	state, err := stateStore.Load()
+	if err != nil || state.Status != runstate.StatusIdle {
+		t.Fatalf("successful run state = %#v, %v", state, err)
+	}
+}
+
+func TestRunnerCreatesMissingJobOutputDirectoryAtExecution(t *testing.T) {
+	job := testJob(t, queue.ContainerMKV)
+	job.Output = filepath.Join(filepath.Dir(job.Output), "new-title", "日本語 Title #01.mkv")
+	runner, store, _, _ := newTestRunner(t, job)
+	if _, err := os.Stat(filepath.Dir(job.Output)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("output directory exists before Run(): %v", err)
+	}
+	result, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Completed != 1 || len(store.q.Jobs) != 0 {
+		t.Fatalf("result = %#v, queue = %#v", result, store.q)
+	}
+	if _, err := os.Stat(job.Output); err != nil {
+		t.Fatalf("final output was not published: %v", err)
 	}
 }
 
@@ -354,6 +383,11 @@ func TestRunnerFailureKeepsHeadStopsAndCleansOutputs(t *testing.T) {
 	second.ID = "job-2"
 	second.Output = filepath.Join(filepath.Dir(job.Output), "second_02.mkv")
 	runner, store, executor, _ := newTestRunner(t, job)
+	stateStore := &runstate.Store{Path: filepath.Join(t.TempDir(), "state.json")}
+	if _, err := stateStore.LoadOrCreate(); err != nil {
+		t.Fatal(err)
+	}
+	runner.State = stateStore
 	store.q.Jobs = append(store.q.Jobs, second)
 	executor.failExecutable = "HandBrakeCLI"
 	if err := os.WriteFile(job.Output, []byte("old"), 0o600); err != nil {
@@ -383,11 +417,35 @@ func TestRunnerFailureKeepsHeadStopsAndCleansOutputs(t *testing.T) {
 	if jobErr.LogPath == "" {
 		t.Fatal("JobError has no log path")
 	}
+	state, stateErr := stateStore.Load()
+	if stateErr != nil || state.Status != runstate.StatusFailed ||
+		state.JobID != job.ID || state.Stage != "handbrake" || state.LogPath != jobErr.LogPath {
+		t.Fatalf("failed run state = %#v, %v", state, stateErr)
+	}
+	if err := runner.DismissAlert("another-job"); err != nil {
+		t.Fatalf("DismissAlert(other) error = %v", err)
+	}
+	state, stateErr = stateStore.Load()
+	if stateErr != nil || state.Status != runstate.StatusFailed {
+		t.Fatalf("unrelated alert was dismissed: %#v, %v", state, stateErr)
+	}
+	if err := runner.DismissAlert(job.ID); err != nil {
+		t.Fatalf("DismissAlert(job) error = %v", err)
+	}
+	state, stateErr = stateStore.Load()
+	if stateErr != nil || state.Status != runstate.StatusIdle {
+		t.Fatalf("matching alert remains: %#v, %v", state, stateErr)
+	}
 }
 
 func TestRunnerCancellationKeepsHeadAndDeletesPartial(t *testing.T) {
 	job := testJob(t, queue.ContainerMKV)
 	runner, store, executor, _ := newTestRunner(t, job)
+	stateStore := &runstate.Store{Path: filepath.Join(t.TempDir(), "state.json")}
+	if _, err := stateStore.LoadOrCreate(); err != nil {
+		t.Fatal(err)
+	}
+	runner.State = stateStore
 	executor.cancelExecutable = "HandBrakeCLI"
 
 	result, err := runner.Run(context.Background())
@@ -401,6 +459,10 @@ func TestRunnerCancellationKeepsHeadAndDeletesPartial(t *testing.T) {
 	paths, _ := metadata.TemporaryPaths(job)
 	if _, statErr := os.Stat(paths.Encode); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("partial encode remains: %v", statErr)
+	}
+	state, stateErr := stateStore.Load()
+	if stateErr != nil || state.Status != runstate.StatusIdle {
+		t.Fatalf("canceled run state = %#v, %v", state, stateErr)
 	}
 }
 

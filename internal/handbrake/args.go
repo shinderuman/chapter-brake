@@ -58,12 +58,20 @@ func EncodeArgs(job queue.Job, encodeOutput string, preset Preset, availableAudi
 
 	args := []string{
 		"--json",
+	}
+	if preset.ImportFile != "" {
+		if job.PresetFile != preset.ImportFile {
+			return nil, fmt.Errorf("job preset file %q does not match selected preset file %q", job.PresetFile, preset.ImportFile)
+		}
+		args = append(args, "--preset-import-file", preset.ImportFile)
+	}
+	args = append(args,
 		"--preset", preset.HandBrakeName,
 		"-i", job.Input,
 		"-o", encodeOutput,
 		"--chapters", fmt.Sprintf("%d-%d", job.ChapterStart, job.ChapterEnd),
 		"--markers",
-	}
+	)
 	if preset.CropMode != "" {
 		args = append(args, "--crop-mode", preset.CropMode)
 	}
