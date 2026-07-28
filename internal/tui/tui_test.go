@@ -605,6 +605,15 @@ func TestWorkflowScreensBuildFromDraft(t *testing.T) {
 	if table.GetRowCount() != len(ui.draft.Media.Chapters)+1 {
 		t.Fatalf("chapter rows = %d", table.GetRowCount())
 	}
+	wantHeaders := []string{"選択", "番号", "開始", "単体", "出力合計", "タイトル"}
+	for column, want := range wantHeaders {
+		if got := table.GetCell(0, column).Text; got != want {
+			t.Fatalf("chapter header %d = %q, want %q", column, got, want)
+		}
+		if got := table.GetCell(1, column).Text; strings.TrimSpace(got) == "" {
+			t.Fatalf("chapter row 1 column %d is empty", column)
+		}
+	}
 	footer := chapters.GetItem(4).(*tview.Form)
 	if label := footer.GetButton(0).GetLabel(); label != "入力した時間の近似値にチェック" {
 		t.Fatalf("approximation button = %q", label)
