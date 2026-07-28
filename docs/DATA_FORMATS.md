@@ -6,10 +6,17 @@
 ~/Documents/ChapterBrake/
 ├── settings.json
 ├── queue.json
-└── logs/
+├── state.json
+└── My Presets.json
+
+~/Library/Logs/ChapterBrake/
+├── app-*.log
+└── job-*.log
 ```
 
-アプリはディレクトリがなければ作成する。
+アプリはデータディレクトリ、ログディレクトリと管理JSONを必要に応じて作成する。
+`My Presets.json`は利用者がHandBrake GUIからエクスポートして配置する任意ファイルで、
+アプリは自動生成しない。
 
 ## settings.json
 
@@ -62,9 +69,11 @@
       "input": "/Volumes/Video/source.mkv",
       "output": "/Volumes/2TB HDD/Movies/source/source_01.mkv",
       "preset": "My H.265 MKV",
+      "preset_file": "/Users/example/Documents/ChapterBrake/My Presets.json",
       "container": "mkv",
       "chapter_start": 1,
       "chapter_end": 5,
+      "duration_seconds": 1421,
       "audio_tracks": [1, 2],
       "subtitles": [1]
     }
@@ -89,6 +98,10 @@
 - 各入力トラックから作る高品質・標準品質の具体設定はChapterBrakeの
   バージョン付き音声方針から決定し、映像`preset`の音声ルールには依存しない。
 - `subtitles`は入力字幕トラック番号。MP4では空配列でなければならない。
+- `preset_file`はGUIエクスポートプリセットを使うジョブの絶対パス。互換内蔵または
+  HandBrake標準プリセットでは省略する。
+- `duration_seconds`は選択チャプター範囲から求めた参考時間。0または省略は旧ジョブの
+  時間不明を表し、エンコード境界には使わない。
 - 字幕焼き付けを表すフィールドは作らない。焼き付けは常に無効という不変条件にする。
 - タイトルメタデータ用フィールドは作らない。値は常に`output`のファイル名から拡張子を除いて導出する。
 
@@ -104,7 +117,7 @@
 
 ## 原子的保存
 
-`settings.json`と`queue.json`は次の考え方で保存する。
+`settings.json`、`queue.json`、`state.json`は次の考え方で保存する。
 
 1. 同一ディレクトリ内に一時ファイルを作成。
 2. インデント付きJSONを完全に書き込む。
@@ -134,12 +147,23 @@
 - MP4はエンコード用一時ファイルからメタデータ用一時ファイルを作り、検証後に後者を最終名へrenameする。
 - 成功・失敗・中断のいずれでも不要な一時ファイルを残さない。
 
+## state.json
+
+実行中ジョブと直近の異常停止を永続化する。`status`は`idle`、`running`、
+`failed`のいずれかとし、`running`のまま次回起動した場合は前回異常終了として
+`failed`へ更新する。進捗率は保存せず、`queue.json`の高頻度更新も行わない。
+
+## My Presets.json
+
+HandBrake GUIのエクスポートJSONをそのまま置く。GUI内部設定は読まず、
+この明示ファイルだけを`--preset-import-file`でHandBrakeCLIへ渡す。
+
 ## ログ
 
 推奨例:
 
 ```text
-logs/
+~/Library/Logs/ChapterBrake/
 ├── app-2026-07-23.log
 ├── job-20260723T143012-source_01.log
 └── job-20260723T151455-source_02.log

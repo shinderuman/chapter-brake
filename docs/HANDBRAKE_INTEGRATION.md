@@ -13,14 +13,16 @@
 
 ## 1. プリセット
 
-- 現在のGUI `My Presets`と同等の解像度・出力形式を選べる内蔵プリセットを
-  ChapterBrake側に持ち、最初の一覧へ表示する。
-- HandBrake GUI、GUI設定ファイル、`--preset-import-gui`へ実行時依存しない。
+- GUIから明示的にエクスポートした
+  `~/Documents/ChapterBrake/My Presets.json`を最初の一覧へ表示し、
+  `--preset-import-file`でCLIへ渡す。ファイルがない場合だけ互換内蔵4件を使う。
+- HandBrake GUI内部設定と`--preset-import-gui`へ実行時依存しない。
 - HandBrake標準プリセットは「その他のプリセットから選ぶ」を選んだ場合だけ
   別一覧へ表示する。
 - プリセット名だけから`MKV`文字列を検索してコンテナを推測しない。
 - プリセットJSON、CLI出力、試験エンコードなど信頼できる情報からコンテナを判定する。
-- キューにはプリセット名と確定コンテナを保存する。
+- キューにはプリセット名、確定コンテナ、エクスポートファイルを使う場合はその
+  絶対パスを保存する。
 - 内蔵プリセットはHandBrake標準プリセットを土台に解像度と出力形式を確定する。
   音声・字幕選択はChapterBrakeの方針でCLI引数を明示して上書きする。
 - 内蔵4件はGUI設定を実行時に読まず、`MP4 Presets`、`MKV Presets`、
@@ -136,3 +138,10 @@ DLNAサーバー・クライアントでは、HandBrake出力直後に引き継�
 - 中断後の出力ファイル状態。
 
 実装は穏当な停止要求、期限付き待機、強制終了の順にする。終了確認後に部分出力を削除する。
+
+## 10. エンコード一時停止
+
+HandBrakeCLI 1.11.2のヘルプにはpause/resumeオプションがない。macOSでは
+HandBrakeCLIの専用プロセスグループへ`SIGSTOP`を送り、`SIGCONT`で再開する。
+即時中断する場合は先に`SIGCONT`で停止状態を解除してから、従来のSIGINT、
+期限後SIGKILL、Waitの順を守る。

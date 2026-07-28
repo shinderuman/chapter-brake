@@ -13,7 +13,8 @@
 - VLCによる完成MKV/MP4の直接表示確認
 
 実ツールのパスとバージョンは、完成アプリの初回起動時に
-`~/Documents/ChapterBrake/logs/app-2026-07-26.log`へ記録されることも確認した。
+当時の`~/Documents/ChapterBrake/logs/app-2026-07-26.log`へ記録されることも確認した。
+2026-07-28以降の新規ログは`~/Library/Logs/ChapterBrake/`へ保存する。
 
 ## 追加保守変更の検証
 
@@ -27,6 +28,33 @@ Chapter 19-21の約23:41へ結合する。
 タイトル名ディレクトリへの出力を単体・TUIシミュレーション・race試験で確認した。
 更新版は`make`で`~/.local/bin/chapterbrake`へインストールし、ビルド成果物との
 SHA-256一致と`--help`起動を確認した。
+
+### 2026-07-28 キュー・一時停止・プリセット・障害表示
+
+- GUIエクスポート`My Presets.json`を製品パーサーで読み、4件の名前、MP4/MKV、
+  解像度、クロップ差を確認した。`HandBrakeCLI --preset-import-file ... --preset-list`
+  の実行でも`MP4 Presets`、`MKV Presets`、`My Old Presets`、`GCCX`が
+  `My Presets/`配下に列挙された。
+- `~/Downloads/My Presets.json`を`~/Documents/ChapterBrake/My Presets.json`へ
+  コピーし、両者のSHA-256一致を確認した。コピー元は保持した。
+- 実HandBrakeCLI 1.11.2を製品の`OSExecutor`で起動し、SIGSTOP後のプロセス状態が
+  `T`になること、SIGCONT後に通常のキャンセル経路で終了できることを
+  `TestRealHandBrakePauseResume`で確認した。
+- TUIシミュレーションで、メインとキュー一覧・詳細の参考動画時間、全体ETA、
+  失敗時の赤枠、チャプター表の固定列、ファイル画面の左キー無効化、
+  `k`連打時に同じ待機ジョブとカーソルが連続移動することを確認した。
+- ジョブ追加後はキュー実行を開始しながら同じ入力ディレクトリへ戻り、
+  タイトル名の出力子ディレクトリはキュー追加時でなく実行開始時に作ることを
+  単体・TUI試験で確認した。
+- 既存ログ417ファイル・96,985,854 bytesを`~/Library/Logs/ChapterBrake`へ移し、
+  移動前後の相対パス付きSHA-256集約値が一致した。新版を実起動して
+  `state.json`がidleで作られること、新しいアプリログがLibrary側へ作られること、
+  Documents側の旧ログディレクトリが再作成されないことを確認した。
+- 2026-07-27の指定ジョブログでHandBrake exit code 4と
+  `av_interleaved_write_frame ... Input/output error`を確認した。同時刻のmacOS
+  統合ログでは`/Volumes/2TB HDD`を含む外部ディスクが取り外され、約10秒後に
+  再認識・再マウントされていた。再実行成功とも整合するため、アプリの範囲生成や
+  プリセットではなく一時的な外部ストレージ切断が原因と判断した。
 
 ## 実ファイル試験
 

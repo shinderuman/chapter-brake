@@ -21,10 +21,12 @@ Homebrewでの導入例:
 brew install go handbrake ffmpeg mkvtoolnix
 ```
 
-HandBrake GUIは不要です。既定一覧にはGUIのMy Presetsに対応する
-`MP4 Presets`、`MKV Presets`、`My Old Presets`、`GCCX`の4件を
-ChapterBrake側で定義し、HandBrakeCLIの標準プリセットを土台にします。
-低解像度の`My Old Presets`は自動クロップ、`GCCX`はクロップなしです。
+HandBrake GUIからエクスポートした`My Presets.json`を
+`~/Documents/ChapterBrake/My Presets.json`へ置くと、その中のプリセットを
+既定一覧へ表示してHandBrakeCLIへ明示的に読み込ませます。GUIアプリ自体や
+GUI内部設定には依存しません。ファイルがない場合だけ、従来の
+`MP4 Presets`、`MKV Presets`、`My Old Presets`、`GCCX`相当の4件を
+互換一覧として表示します。
 「その他のプリセットから選ぶ」ではHandBrakeCLIの標準プリセットだけを表示します。
 
 ## ビルドと起動
@@ -62,7 +64,12 @@ export PATH="$HOME/.local/bin:$PATH"
 ~/Documents/ChapterBrake/
 ├── settings.json
 ├── queue.json
-└── logs/
+├── state.json
+└── My Presets.json
+
+~/Library/Logs/ChapterBrake/
+├── app-*.log
+└── job-*.log
 ```
 
 初期入力先は`/Volumes/2TB HDD/Images`、初期出力先は
@@ -75,7 +82,9 @@ version 1・2の既存設定は既存値を維持してversion 4へ移行しま�
 旧既定出力先`/Volumes/2TB HDD/mp4/`のままなら新既定値へ移行し、変更済みの
 出力先は維持します。
 不正JSON、未知のversion、不正な区切り時間、存在しない入力先、
-存在しない・書き込めない出力先は自動修復せずエラーで停止します。
+存在しない入力先、または存在しない・書き込めない出力先の基準ディレクトリは
+自動修復せずエラーで停止します。タイトル名の子ディレクトリはジョブ開始時に
+必要なら作成します。
 
 ## 操作の流れ
 
@@ -98,16 +107,19 @@ version 1・2の既存設定は既存値を維持してversion 4へ移行しま�
 - チェック項目上の`Enter`: チェックを変えず次へ
 - 出力名・開始番号入力中の`Enter`: 入力を確定して次へ
 - チャプター画面の区切り時間入力中の`Enter`: 入力値で再計算して次へ
-- `←` / `Backspace`: 前の画面へ戻る
+- `←` / `Backspace`: 多くの設定画面で前の画面へ戻る
 - キュー追加中の`Esc`: メインメニューへ戻る
 - 入力欄では`←` / `→`がカーソル移動、`Backspace`が文字削除
-- ファイル選択では`←`が親ディレクトリ、`Backspace` / `Esc`がメインへ戻る
+- ファイル選択では`../`の決定が親ディレクトリ移動、`Backspace` / `Esc`がメインへ戻る
 - キュー一覧の`Enter`: ジョブ詳細を表示
 - キュー一覧の`j` / `k`: 待機ジョブを一段下／上へ並び替え
-- 実行中ジョブ詳細: 現在ジョブ後の一時停止、または即時中断して一時停止
+- 実行中ジョブ詳細: エンコード一時停止・再開、現在ジョブ後の一時停止、
+  または即時中断して一時停止
 
 実行中も同じアプリでキューへ追加できます。キュー一覧には進捗・段階・ETAを表示し、
-待機ジョブの詳細から削除できます。実行中ジョブは削除・移動できません。
+各ジョブの参考動画時間と全体ETAも表示します。メイン画面にも全キューを
+読み取り専用で表示します。待機ジョブの詳細から削除でき、`j` / `k`を繰り返すと
+同じジョブを連続して下／上へ移動できます。実行中ジョブは削除・移動できません。
 二重起動と複数同時エンコードは行いません。
 
 ## チャプター、音声、字幕
@@ -149,6 +161,10 @@ ffprobe検証、最終rename、queue保存が成功するまで残ります。
 残して後続へ進みません。通常終了は現在ジョブを完了してから残りを一時停止します。
 次回起動後は残った先頭ジョブから再開します。中断した同一ジョブは最初から処理します。
 
+実行中詳細の「エンコードを一時停止」はHandBrakeCLIのプロセスグループを
+`SIGSTOP`で止め、「再開」で`SIGCONT`を送ります。同じアプリを開いている間だけ
+同じ処理を再開でき、アプリ終了をまたぐレジュームではありません。
+
 ## title後処理と表示確認
 
 - MKV: `mkvpropedit`で一時MKVのsegment titleだけを直接変更します。
@@ -161,7 +177,7 @@ title値は常に最終ファイル名から拡張子を除いた文字列です
 
 ## ログ
 
-`~/Documents/ChapterBrake/logs/`へ次を保存します。
+`~/Library/Logs/ChapterBrake/`へ次を保存します。
 
 - 日別アプリログ
 - ジョブ要約ログ
@@ -190,6 +206,15 @@ PoCの短いMKVと実ツールを使うランナー統合試験:
 CHAPTERBRAKE_INTEGRATION=1 \
 CHAPTERBRAKE_FIXTURE=/absolute/path/to/source-four-chapters.mkv \
 go test ./internal/runner -run TestRealToolchainIntegration -v -count=1
+```
+
+GUIエクスポートと実HandBrakeCLIで一時停止・再開を確認する試験:
+
+```sh
+CHAPTERBRAKE_INTEGRATION=1 \
+CHAPTERBRAKE_FIXTURE="$PWD/poc/artifacts/source-long-chapters.mkv" \
+CHAPTERBRAKE_PRESET_FILE="$HOME/Documents/ChapterBrake/My Presets.json" \
+go test ./internal/process -run TestRealHandBrakePauseResume -v -count=1
 ```
 
 PoC固有のスクリプトとfixtureは`poc/`の独立Goモジュールへ隔離され、製品の
