@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>ChapterBrake</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <button class="brand" type="button" data-action="home" aria-label="ChapterBrakeのメイン画面へ">
+        <span class="brand-mark">CB</span>
+        <span>
+          <strong>ChapterBrake</strong>
+          <small>LOCAL ENCODE QUEUE</small>
+        </span>
+      </button>
+      <div class="topbar-status">
+        <span id="connection-status" class="connection pending">接続中</span>
+        <span id="global-status" class="global-status">状態を取得中…</span>
+      </div>
+    </header>
+
+    <div id="alert-region" class="alert-region" aria-live="assertive"></div>
+
+    <div class="workspace">
+      <main id="main" class="main-panel" tabindex="-1" aria-live="polite"></main>
+      <aside class="queue-rail" aria-label="キュー概要">
+        <div class="rail-header">
+          <div>
+            <p class="eyebrow">QUEUE</p>
+            <h2>実行キュー</h2>
+          </div>
+          <button class="text-button" type="button" data-action="show-queue">詳細</button>
+        </div>
+        <div id="queue-summary" class="queue-summary"></div>
+      </aside>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <dialog id="confirm-dialog" class="confirm-dialog">
+      <form method="dialog">
+        <p class="eyebrow">CONFIRM</p>
+        <h2 id="confirm-title">確認</h2>
+        <p id="confirm-message"></p>
+        <div class="button-row">
+          <button type="button" data-action="close-confirm" data-value="cancel" class="button secondary">戻る</button>
+          <button type="button" data-action="close-confirm" data-value="confirm" id="confirm-button" class="button danger">実行</button>
+        </div>
+      </form>
+    </dialog>
+  </div>
+  <noscript>ChapterBrakeのWeb UIにはJavaScriptが必要です。</noscript>
+</body>
+</html>

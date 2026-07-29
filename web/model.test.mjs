@@ -1,0 +1,50 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  apiErrorMessage,
+  canDeleteJob,
+  fileSize,
+  formatDuration,
+  normalizeArray,
+  outputName,
+  queueJobState,
+  runtimeLabel,
+} from "./model.mjs";
+
+test("duration and file-size formatting", () => {
+  assert.equal(formatDuration(0), "0:00");
+  assert.equal(formatDuration(1421), "23:41");
+  assert.equal(formatDuration(5690), "1:34:50");
+  assert.equal(formatDuration(-1), "--:--");
+  assert.equal(fileSize(1936423), "1.8 MiB");
+});
+
+test("runtime labels distinguish pause and failure", () => {
+  assert.equal(runtimeLabel(null), "待機中");
+  assert.equal(runtimeLabel({ queue_paused: true }), "キュー一時停止");
+  assert.equal(runtimeLabel({ running: true, current: {} }), "エンコード実行中");
+  assert.equal(runtimeLabel({ running: true, current: { encoding_paused: true } }), "エンコード一時停止");
+  assert.equal(runtimeLabel({ failure: { message: "failed" } }), "異常停止");
+});
+
+test("queue row state and delete boundary", () => {
+  const job = { id: "job-1" };
+  const running = { running: true, current: { job_id: "job-1", encoding_paused: false } };
+  assert.equal(queueJobState(job, running), "実行中");
+  assert.equal(queueJobState(job, { ...running, current: { ...running.current, encoding_paused: true } }), "一時停止");
+  assert.equal(queueJobState(job, {
+    failure: { message: "failed" },
+    persistent_state: { job_id: "job-1" },
+  }), "異常停止");
+  assert.equal(queueJobState({ id: "job-2" }, running), "待機");
+  assert.equal(canDeleteJob(job, running), false);
+  assert.equal(canDeleteJob({ id: "job-2" }, running), true);
+});
+
+test("path, arrays, and structured errors", () => {
+  assert.equal(outputName("/Volumes/Movies/作品 #01.mkv"), "作品 #01.mkv");
+  assert.deepEqual(normalizeArray(null), []);
+  assert.deepEqual(normalizeArray([1, 2]), [1, 2]);
+  assert.equal(apiErrorMessage({ payload: { error: { message: "構造化エラー" } } }), "構造化エラー");
+});
