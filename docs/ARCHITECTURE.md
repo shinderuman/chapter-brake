@@ -13,8 +13,8 @@ PoCで必要なコードは`poc/`へ隔離し、次を守る。
 
 ## 1. 原則
 
-- 小規模なローカルTUIアプリとして理解しやすい構成を優先する。
-- ドメインロジック、永続化、外部コマンド、TUIを分離する。
+- 小規模なローカルアプリとして理解しやすい構成を優先する。
+- ドメインロジック、永続化、外部コマンド、TUI/Web境界を分離する。
 - レイヤー数を増やすこと自体を目的にしない。
 - 実HandBrakeCLI、ffmpeg、mkvpropeditがなくても、範囲生成、命名、JSON、各コマンド引数生成、タイトル値決定、キュー進行を単体テストできるようにする。
 
@@ -33,6 +33,8 @@ internal/metadata
 internal/runner
 internal/runstate
 internal/logging
+internal/control
+internal/webapi
 internal/tui
 ```
 
@@ -117,8 +119,25 @@ internal/tui
 - ジョブログ作成。
 - stdout/stderrのtee。
 
+### `internal/control`
+
+- Webバックエンドのキュー実行状態を所有する。
+- `runner.Runner`の進捗、段階、ジョブログ、一時停止、完了コールバックを
+  JSONで表現可能なスナップショットへ変換する。
+- HandBrake一時停止、再開、現在ジョブ後停止、即時中断、通常終了待ちを
+  既存Runnerへ委譲し、キューや外部CLI引数を独自実装しない。
+
+### `internal/webapi`
+
+- `LOCAL_WEB_SOCKET`で指定されたUnixドメインソケットへHTTP APIを公開する。
+- 入力選択からキュー操作までを型付きJSONで既存`app.Service`へ接続する。
+- 状態、進捗、ETA、ジョブログ差分をSSEで配信する。
+- 任意コマンド、任意出力パス、HandBrakeCLI引数を受け取らない。
+- API契約は`docs/WEB_API.md`を正本とする。
+
 ### `internal/tui`
 
+- Web移行完了までの一時的な既存フロントエンドとする。
 - 画面状態と入力処理。
 - ドメインロジックを重複実装しない。
 - 採用ライブラリ固有型を他パッケージへ漏らさない。

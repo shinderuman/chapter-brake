@@ -19,6 +19,8 @@ Go製TUIアプリケーションである。
 
 - `docs/DECISIONS.md`: 設計判断と理由
 - `docs/HANDBRAKE_INTEGRATION.md`: 外部ツールとの統合方式
+- `docs/WEB_API.md`: ChapterBrake WebバックエンドのHTTP/SSE契約
+- `docs/WEB_API_RESULT.md`: Webバックエンド実装と検証結果
 - `docs/POC_RESULT.md`、`docs/LOCAL_INVESTIGATION.md`: 実機検証の根拠
 - `docs/ACCEPTANCE_RESULT.md`: 完成アプリの検証結果
 - `PLANS.md`: 開発履歴と複数段階作業の進捗
