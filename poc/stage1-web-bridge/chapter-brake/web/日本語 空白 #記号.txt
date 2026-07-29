@@ -1,0 +1,1 @@
+special-static-path-ok

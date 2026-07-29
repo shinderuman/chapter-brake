@@ -429,6 +429,27 @@ Codexは作業日、実施内容、検証結果、残課題をここへ追記す
   約10秒後に再認識・再マウントされていた。再実行成功とも整合し、原因は
   一時的な外部ストレージ切断と判断した。
 
+### 2026-07-29 Web Bridge Stage 0・Stage 1
+
+- 現行仕様、補助資料、コード、テスト、Makefile、外部CLI、参考リポジトリ
+  `endless-video-game-music`を調査し、処理本体とTUI依存境界を整理した。
+- 通常テスト、race、vet、build、diff check、実HandBrakeCLIによるMKV/MP4統合試験、
+  実プロセス一時停止・再開試験が成功した。Apple AudioToolboxを使う統合試験は
+  サンドボックス外実行が必要であることも再確認した。
+- `poc/stage1-web-bridge/`へ、汎用ローカルWebサーバー、ChapterBrake最小
+  バックエンド、HTML/CSS/JavaScriptを製品コードから隔離して実装した。
+- Unixドメインソケット経由のJSON、SSE、キャンセル伝播、特殊文字パス、
+  バックエンド異常終了、子プロセス停止とsocket清掃を自動試験と実通信で確認した。
+- Google Chrome 150とMicrosoft Edge 150で同じ画面とSSE接続を確認した。
+  Edgeは環境になかったため、利用者承認後にHomebrew Caskで導入した。
+- PoC判定は`GO WITH CHANGES`。macOSのsocketパス長制限に対応する短いruntime pathと、
+  ChapterBrakeの現在ジョブ完了を待てる汎用的なshutdown timeout契約を製品版へ
+  追加する必要がある。
+- 汎用サーバーと各アプリのCSSは共有せず、各アプリが自身の`web/`を所有する。
+- 利用者の最新方針により、製品切替後にTUIとWebを恒久共存させない。
+- 詳細は`docs/WEB_BRIDGE_POC_RESULT.md`へ記録した。Stage 2は利用者の明示的な
+  GO、最終契約、リポジトリ名、配置先の確定まで開始しない。
+
 ## 全作業完了時の権限クリーンアップ
 
 全Milestoneと受け入れ確認が完了した最後に、今回の作業中に付与された権限を
