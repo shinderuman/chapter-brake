@@ -51,6 +51,23 @@ type Runner struct {
 	Stage          func(string, string)
 	Completed      func(string)
 	PauseRequested func() bool
+	LogOpened      func(string, string)
+}
+
+type Callbacks struct {
+	Progress       func(string, handbrake.Progress)
+	Stage          func(string, string)
+	Completed      func(string)
+	PauseRequested func() bool
+	LogOpened      func(string, string)
+}
+
+func (r *Runner) SetCallbacks(callbacks Callbacks) {
+	r.Progress = callbacks.Progress
+	r.Stage = callbacks.Stage
+	r.Completed = callbacks.Completed
+	r.PauseRequested = callbacks.PauseRequested
+	r.LogOpened = callbacks.LogOpened
 }
 
 type pausableExecutor interface {
@@ -224,6 +241,9 @@ func (r Runner) runJob(ctx context.Context, job queue.Job) (logPath string, stag
 		return "", "open-log", err
 	}
 	logPath = jobLog.Path()
+	if r.LogOpened != nil {
+		r.LogOpened(job.ID, logPath)
+	}
 	defer func() {
 		closeErr := jobLog.Close()
 		if closeErr != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"chapterbrake/internal/app"
 	"chapterbrake/internal/config"
+	"chapterbrake/internal/control"
 	"chapterbrake/internal/handbrake"
 	"chapterbrake/internal/instance"
 	"chapterbrake/internal/logging"
@@ -23,11 +25,16 @@ import (
 	"chapterbrake/internal/runner"
 	"chapterbrake/internal/runstate"
 	"chapterbrake/internal/tui"
+	"chapterbrake/internal/webapi"
 )
 
 type terminal interface {
 	Run() error
 	Shutdown()
+}
+
+type webBackend interface {
+	Serve(context.Context) error
 }
 
 type dependencies struct {
@@ -38,6 +45,7 @@ type dependencies struct {
 	jobExecutor   process.Executor
 	inspectTools  func(context.Context, process.Executor) ([]app.ToolInfo, error)
 	newTerminal   func(*app.Service, *runner.Runner, string) (terminal, error)
+	newWebBackend func(webapi.Config) (webBackend, error)
 }
 
 type runOptions struct {
@@ -53,6 +61,9 @@ func Run(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
+	if socket := os.Getenv("LOCAL_WEB_SOCKET"); socket != "" {
+		return runWeb(ctx, productionDependencies(), opts, socket)
+	}
 	return run(ctx, productionDependencies(), opts)
 }
 
@@ -95,10 +106,73 @@ func productionDependencies() dependencies {
 		) (terminal, error) {
 			return tui.New(service, queueRunner, initialDirectory)
 		},
+		newWebBackend: func(config webapi.Config) (webBackend, error) {
+			return webapi.New(config)
+		},
 	}
 }
 
 func run(ctx context.Context, deps dependencies, opts runOptions) error {
+	return runWithFrontend(ctx, deps, opts, func(
+		ctx context.Context,
+		service *app.Service,
+		queueRunner *runner.Runner,
+		initialDirectory string,
+		_ *slog.Logger,
+	) error {
+		screen, err := deps.newTerminal(service, queueRunner, initialDirectory)
+		if err != nil {
+			return err
+		}
+		finished := make(chan struct{})
+		defer close(finished)
+		go func() {
+			select {
+			case <-ctx.Done():
+				screen.Shutdown()
+			case <-finished:
+			}
+		}()
+		if err := screen.Run(); err != nil {
+			return fmt.Errorf("run TUI: %w", err)
+		}
+		return nil
+	})
+}
+
+func runWeb(ctx context.Context, deps dependencies, opts runOptions, socket string) error {
+	return runWithFrontend(ctx, deps, opts, func(
+		ctx context.Context,
+		service *app.Service,
+		queueRunner *runner.Runner,
+		initialDirectory string,
+		logger *slog.Logger,
+	) error {
+		controller, err := control.New(service, queueRunner)
+		if err != nil {
+			return err
+		}
+		backend, err := deps.newWebBackend(webapi.Config{
+			Socket:           socket,
+			InitialDirectory: initialDirectory,
+			Application:      service,
+			Presets:          service.Presets,
+			Controller:       controller,
+			Logger:           logger,
+		})
+		if err != nil {
+			return err
+		}
+		return backend.Serve(ctx)
+	})
+}
+
+func runWithFrontend(
+	ctx context.Context,
+	deps dependencies,
+	opts runOptions,
+	frontend func(context.Context, *app.Service, *runner.Runner, string, *slog.Logger) error,
+) error {
 	home, err := deps.homeDirectory()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
@@ -216,23 +290,8 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 		"directory", initialDirectory,
 		"source", initialDirectorySource,
 	)
-	screen, err := deps.newTerminal(service, queueRunner, initialDirectory)
-	if err != nil {
+	if err := frontend(ctx, service, queueRunner, initialDirectory, appLogger); err != nil {
 		return err
-	}
-
-	finished := make(chan struct{})
-	defer close(finished)
-	go func() {
-		select {
-		case <-ctx.Done():
-			screen.Shutdown()
-		case <-finished:
-		}
-	}()
-
-	if err := screen.Run(); err != nil {
-		return fmt.Errorf("run TUI: %w", err)
 	}
 	appLogger.Info("application stopped")
 	return nil

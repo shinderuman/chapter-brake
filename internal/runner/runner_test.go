@@ -151,6 +151,25 @@ type fakeExecutor struct {
 	headObserved       bool
 }
 
+type pausableFakeExecutor struct {
+	fakeExecutor
+	paused bool
+}
+
+func (executor *pausableFakeExecutor) Pause() error {
+	executor.paused = true
+	return nil
+}
+
+func (executor *pausableFakeExecutor) Resume() error {
+	executor.paused = false
+	return nil
+}
+
+func (executor *pausableFakeExecutor) IsPaused() bool {
+	return executor.paused
+}
+
 func (e *fakeExecutor) Run(
 	_ context.Context,
 	invocation process.Invocation,
@@ -275,6 +294,14 @@ func TestRunnerMKVSuccessRemovesHeadOnlyAfterPublish(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner.State = stateStore
+	var openedJobID string
+	var openedLogPath string
+	runner.SetCallbacks(Callbacks{
+		LogOpened: func(jobID, logPath string) {
+			openedJobID = jobID
+			openedLogPath = logPath
+		},
+	})
 	result, err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -284,6 +311,9 @@ func TestRunnerMKVSuccessRemovesHeadOnlyAfterPublish(t *testing.T) {
 	}
 	if !executor.headObserved {
 		t.Fatal("queue head was not present while commands ran")
+	}
+	if openedJobID != job.ID || !filepath.IsAbs(openedLogPath) {
+		t.Fatalf("opened job log = %q, %q", openedJobID, openedLogPath)
 	}
 	content, err := os.ReadFile(job.Output)
 	if err != nil {
@@ -524,6 +554,45 @@ func TestRunnerEmptyQueueAndValidation(t *testing.T) {
 	invalid.Store = nil
 	if _, err := invalid.Run(context.Background()); err == nil {
 		t.Fatal("Run(invalid dependencies) error = nil")
+	}
+}
+
+func TestRunnerPauseResumeAndAlertBoundaries(t *testing.T) {
+	executor := &pausableFakeExecutor{}
+	run := Runner{Executor: executor}
+	if err := run.PauseCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	if !run.CurrentPaused() {
+		t.Fatal("CurrentPaused() = false after pause")
+	}
+	if err := run.ResumeCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	if run.CurrentPaused() {
+		t.Fatal("CurrentPaused() = true after resume")
+	}
+	idle, err := run.Alert()
+	if err != nil || idle.Status != runstate.StatusIdle {
+		t.Fatalf("nil state alert = %#v, %v", idle, err)
+	}
+
+	stateStore := &runstate.Store{Path: filepath.Join(t.TempDir(), "state.json")}
+	failed := runstate.State{
+		Version: runstate.Version, Status: runstate.StatusFailed, JobID: "job-1",
+		Output: "/tmp/output.mkv", Stage: "handbrake", Message: "failed", UpdatedAt: time.Now(),
+	}
+	if err := stateStore.Save(failed); err != nil {
+		t.Fatal(err)
+	}
+	run.State = stateStore
+	alert, err := run.Alert()
+	if err != nil || alert.Status != runstate.StatusFailed {
+		t.Fatalf("failed alert = %#v, %v", alert, err)
+	}
+	jobError := &JobError{JobID: "job-1", Stage: "handbrake", Canceled: true, Err: context.Canceled}
+	if !strings.Contains(jobError.Error(), "canceled") {
+		t.Fatalf("job error = %q", jobError.Error())
 	}
 }
 

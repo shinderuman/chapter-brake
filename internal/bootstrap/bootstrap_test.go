@@ -17,6 +17,7 @@ import (
 	"chapterbrake/internal/media"
 	"chapterbrake/internal/process"
 	"chapterbrake/internal/runner"
+	"chapterbrake/internal/webapi"
 )
 
 type fakeExecutor struct{}
@@ -29,6 +30,17 @@ type fakeTerminal struct {
 	run      func() error
 	stopped  chan struct{}
 	stopOnce sync.Once
+}
+
+type fakeWebBackend struct {
+	serve func(context.Context) error
+}
+
+func (backend *fakeWebBackend) Serve(ctx context.Context) error {
+	if backend.serve != nil {
+		return backend.serve(ctx)
+	}
+	return nil
 }
 
 func (t *fakeTerminal) Run() error {
@@ -140,6 +152,25 @@ func TestRunLoadsExportedMyPresets(t *testing.T) {
 	if len(presets) != 1 || presets[0].DisplayName != "Custom GUI MKV" ||
 		presets[0].ImportFile != presetPath {
 		t.Fatalf("curated presets = %#v", presets)
+	}
+}
+
+func TestRunWebBuildsBackend(t *testing.T) {
+	deps, _, inputDirectory, _ := testDependencies(t)
+	var gotConfig webapi.Config
+	deps.newWebBackend = func(config webapi.Config) (webBackend, error) {
+		gotConfig = config
+		return &fakeWebBackend{}, nil
+	}
+	socket := filepath.Join(t.TempDir(), "chapterbrake.sock")
+	if err := runWeb(context.Background(), deps, runOptions{}, socket); err != nil {
+		t.Fatalf("runWeb() error = %v", err)
+	}
+	if gotConfig.Socket != socket || gotConfig.InitialDirectory != inputDirectory {
+		t.Fatalf("web config = %#v", gotConfig)
+	}
+	if gotConfig.Application == nil || gotConfig.Presets == nil || gotConfig.Controller == nil || gotConfig.Logger == nil {
+		t.Fatalf("web dependencies are incomplete: %#v", gotConfig)
 	}
 }
 
