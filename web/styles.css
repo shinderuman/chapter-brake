@@ -304,6 +304,13 @@ button.list-card:hover { border-color: var(--line-strong); background: var(--pan
 .list-card strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-card small { display: block; margin-top: 5px; color: var(--muted); }
 .list-card .meta { flex: 0 0 auto; color: var(--muted); font: 12px/1.4 ui-monospace, monospace; }
+.file-list .file-size {
+  min-width: 7.5ch;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 750;
+  text-align: right;
+}
 
 .path-bar {
   display: flex;
@@ -392,14 +399,13 @@ tr.selected-output { background: rgb(231 255 70 / 5%); }
 .queue-ghost { opacity: .25; }
 .queue-chosen { border-color: var(--accent); box-shadow: 0 10px 28px rgb(0 0 0 / 35%); }
 
-.progress {
-  overflow: hidden;
-  height: 5px;
+.queue-progress {
+  display: block;
+  width: 100%;
+  height: 7px;
   margin-top: 10px;
-  border-radius: 999px;
-  background: #07090b;
+  accent-color: var(--accent);
 }
-.progress > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
 
 .queue-row { display: grid; grid-template-columns: 50px minmax(0, 1fr) auto; gap: 14px; align-items: center; }
 .queue-index { color: var(--muted); font: 12px ui-monospace, monospace; }
@@ -426,10 +432,21 @@ tr.selected-output { background: rgb(231 255 70 / 5%); }
   color: var(--muted);
 }
 
+.loading-content {
+  display: grid;
+  width: min(360px, 80%);
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.loading-content strong { color: var(--text); font-size: 15px; }
+.busy-progress { width: 100%; height: 10px; accent-color: var(--accent); }
+
 .spinner {
   width: 28px;
   height: 28px;
-  margin: 0 auto 12px;
+  margin: 0 auto;
   border: 2px solid var(--line);
   border-top-color: var(--accent);
   border-radius: 50%;

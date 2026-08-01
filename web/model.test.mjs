@@ -8,6 +8,7 @@ import {
   formatDuration,
   normalizeArray,
   outputName,
+  progressPercent,
   queueJobState,
   queuePosition,
   runtimeLabel,
@@ -20,6 +21,9 @@ test("duration and file-size formatting", () => {
   assert.equal(formatDuration(5690), "1:34:50");
   assert.equal(formatDuration(-1), "--:--");
   assert.equal(fileSize(1936423), "1.8 MiB");
+  assert.equal(progressPercent(-1), 0);
+  assert.equal(progressPercent(0.7459), 75);
+  assert.equal(progressPercent(2), 100);
 });
 
 test("queue position and settings request", () => {

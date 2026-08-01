@@ -21,6 +21,10 @@ export function fileSize(bytes) {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 
+export function progressPercent(value) {
+  return Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100);
+}
+
 export function runtimeLabel(runtime) {
   if (runtime?.failure) return "異常停止";
   if (runtime?.running && runtime.current?.encoding_paused) return "エンコード一時停止";

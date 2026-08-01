@@ -46,7 +46,13 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <dialog id="job-dialog" class="modal-dialog">
-      <div id="job-dialog-content"></div>
+      <form method="dialog">
+        <div class="modal-header">
+          <div><p class="eyebrow">JOB DETAIL</p><h2 id="job-dialog-title"></h2><p id="job-dialog-status"></p></div>
+          <button class="icon-button" type="submit" value="close" aria-label="詳細を閉じる">×</button>
+        </div>
+        <div id="job-dialog-content"></div>
+      </form>
     </dialog>
     <dialog id="settings-dialog" class="modal-dialog settings-dialog">
       <form id="settings-form">

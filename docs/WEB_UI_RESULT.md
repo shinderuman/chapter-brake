@@ -16,6 +16,16 @@
 - ChromeのconsoleにChapterBrake由来のwarning/errorはなかった。Chrome拡張機能自身の
   userscript読込warningはアプリと無関係なため判定対象外とした。
 
+## 2026-08-01 実行中UI修正
+
+- 実運用キューで判明したCSP違反を修正し、inline styleによる進捗幅指定を標準
+  `progress`要素の`value`へ置き換えた。
+- ファイル容量を17px・font-weight 750で表示し、解析中にスピナーと不定進捗を併記した。
+- SSE更新時のDOM全置換を抑止し、右キューは進捗値、詳細はログ本文だけを更新する。
+  詳細の閉じるボタンは動的内容の外へ固定し、標準dialogフォームで閉じるようにした。
+- 実Chromeで実行中進捗とログを受信しながら詳細の開閉を確認した。解析中表示、解析完了遷移、
+  容量のcomputed styleも確認し、修正後のCSP・`app.js` console errorは0件だった。
+
 ## 1. 判定
 
 `PASS`

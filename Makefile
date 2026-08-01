@@ -92,7 +92,7 @@ stop:
 
 test:
 	$(GO) test ./...
-	node --test web/model.test.mjs
+	node --test web/*.test.mjs
 
 check:
 	gofmt -w .
@@ -100,7 +100,7 @@ check:
 	$(GO) test -race ./...
 	$(GO) vet ./...
 	$(GO) build ./...
-	node --test web/model.test.mjs
+	node --test web/*.test.mjs
 	node --check web/app.js
 
 clean:

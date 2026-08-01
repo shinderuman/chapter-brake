@@ -5,6 +5,7 @@ import {
   formatDuration,
   normalizeArray,
   outputName,
+  progressPercent,
   queueJobState,
   queuePosition,
   runtimeLabel,
@@ -22,6 +23,8 @@ const confirmTitle = document.querySelector("#confirm-title");
 const confirmMessage = document.querySelector("#confirm-message");
 const confirmButton = document.querySelector("#confirm-button");
 const jobDialog = document.querySelector("#job-dialog");
+const jobDialogTitle = document.querySelector("#job-dialog-title");
+const jobDialogStatus = document.querySelector("#job-dialog-status");
 const jobDialogContent = document.querySelector("#job-dialog-content");
 const settingsDialog = document.querySelector("#settings-dialog");
 const settingsForm = document.querySelector("#settings-form");
@@ -29,6 +32,8 @@ const queueCount = document.querySelector("#queue-count");
 
 let queueSortable = null;
 let queueDragging = false;
+let queueRenderKey = "";
+let jobDialogRenderKey = "";
 
 const state = {
   view: "files",
@@ -85,14 +90,22 @@ function showToast(message, error = false) {
   showToast.timer = setTimeout(() => toast.classList.remove("visible"), 3500);
 }
 
-function setBusy(message = "処理中…") {
+function setBusy(message = "処理中…", showProgress = false) {
   state.busy = true;
-  main.innerHTML = `<div class="loading"><div><div class="spinner"></div>${escapeHTML(message)}</div></div>`;
+  main.innerHTML = `
+    <div class="loading">
+      <div class="loading-content">
+        <div class="spinner"></div>
+        <strong>${escapeHTML(message)}</strong>
+        ${showProgress ? `<progress class="busy-progress" aria-label="解析処理中"></progress>` : ""}
+      </div>
+    </div>
+  `;
 }
 
-async function perform(action, busyMessage) {
+async function perform(action, busyMessage, showProgress = false) {
   if (state.busy) return;
-  if (busyMessage) setBusy(busyMessage);
+  if (busyMessage) setBusy(busyMessage, showProgress);
   try {
     return await action();
   } catch (error) {
@@ -142,26 +155,49 @@ function renderQueueSummary() {
   if (queueDragging) return;
   const jobs = normalizeArray(state.queue?.jobs);
   queueCount.textContent = String(jobs.length);
+  const runtime = state.runtime;
+  const renderKey = JSON.stringify({
+    jobs: jobs.map(job => ({
+      id: job.id,
+      output: job.output,
+      chapter_start: job.chapter_start,
+      chapter_end: job.chapter_end,
+      duration_seconds: job.duration_seconds,
+      state: queueJobState(job, runtime),
+      current: runtime?.current?.job_id === job.id,
+      deletable: canDeleteJob(job, runtime),
+    })),
+    label: runtimeLabel(runtime),
+    running: Boolean(runtime?.running),
+    queue_paused: Boolean(runtime?.queue_paused),
+    pause_after_current: Boolean(runtime?.pause_after_current),
+    stage: runtime?.current?.stage || "",
+    encoding_paused: Boolean(runtime?.current?.encoding_paused),
+  });
+  if (renderKey === queueRenderKey) {
+    updateQueueProgress(runtime);
+    return;
+  }
+  queueRenderKey = renderKey;
   queueSortable?.destroy();
   queueSortable = null;
   if (jobs.length === 0) {
     queueSummary.innerHTML = `<div class="queue-summary-empty">キューは空です</div>`;
     return;
   }
-  const runtime = state.runtime;
   const queueControl = !runtime?.running
     ? `<button class="button small" data-action="start-queue">${runtime?.queue_paused ? "キューを再開" : "キューを開始"}</button>`
     : `<span class="status-chip ${runtime.current?.encoding_paused ? "paused" : "ready"}">${escapeHTML(runtimeLabel(runtime))}</span>`;
   queueSummary.innerHTML = `<div class="rail-controls">${queueControl}</div>` + jobs.map((job, index) => {
     const status = queueJobState(job, state.runtime);
     const current = state.runtime?.current?.job_id === job.id;
-    const progress = current ? Math.max(0, Math.min(1, state.runtime.current.progress || 0)) : 0;
+    const progress = current ? progressPercent(state.runtime.current.progress) : 0;
     const directControls = current ? currentControls(state.runtime, true) : waitingControls(job, state.runtime, true);
     return `
       <article class="queue-mini ${current ? "current not-draggable" : ""}" data-job-id="${escapeHTML(job.id)}">
         <div class="queue-mini-top"><span>${String(index + 1).padStart(2, "0")} · ${escapeHTML(status)}</span><span>約${formatDuration(job.duration_seconds)}</span></div>
         <button class="queue-mini-detail" data-action="show-job" data-id="${escapeHTML(job.id)}"><strong>${escapeHTML(outputName(job.output))}</strong><small>Chapter ${job.chapter_start}–${job.chapter_end}</small></button>
-        ${current ? `<div class="progress" aria-label="進捗 ${Math.round(progress * 100)}%"><span style="width:${progress * 100}%"></span></div>` : ""}
+        ${current ? `<progress class="queue-progress" aria-label="進捗 ${progress}%" max="100" value="${progress}">${progress}%</progress>` : ""}
         <div class="queue-mini-actions">${!current ? `<button class="drag-handle" type="button" aria-label="ドラッグして並び替え">↕</button>` : ""}${directControls}</div>
       </article>
     `;
@@ -191,10 +227,23 @@ function renderQueueSummary() {
         await queueAction(`/queue/${encodeURIComponent(id)}/move`, { method: "POST", body: { position } });
       } catch {
         await refreshQueue();
+        queueRenderKey = "";
         renderQueueSummary();
       }
     },
   });
+}
+
+function updateQueueProgress(runtime) {
+  if (!runtime?.current) return;
+  const current = [...queueSummary.querySelectorAll(".queue-mini")]
+    .find(item => item.dataset.jobId === runtime.current.job_id);
+  const progress = current?.querySelector(".queue-progress");
+  if (!progress) return;
+  const percent = progressPercent(runtime.current.progress);
+  progress.value = percent;
+  progress.textContent = `${percent}%`;
+  progress.setAttribute("aria-label", `進捗 ${percent}%`);
 }
 
 function pageHeader(step, title, copy = "", actions = "") {
@@ -247,7 +296,7 @@ function renderFiles() {
       ${entries.map(entry => `
         <button class="list-card" data-action="${entry.IsDir ? "open-directory" : "analyze-file"}" data-path="${escapeHTML(entry.Path)}">
           <span><strong>${escapeHTML(entry.Name)}</strong><small>${entry.IsDir ? "フォルダ" : "MKVファイル"}</small></span>
-          <span class="meta">${entry.IsDir ? "開く →" : fileSize(entry.Size)}</span>
+          <span class="meta ${entry.IsDir ? "" : "file-size"}">${entry.IsDir ? "開く →" : fileSize(entry.Size)}</span>
         </button>
       `).join("") || `<div class="notice">このフォルダにMKVファイルはありません。</div>`}
     </div>
@@ -261,7 +310,7 @@ async function analyzeFile(path) {
     state.presets = normalizeArray(payload.presets);
     state.presetSource = "curated";
     state.view = "presets";
-  }, "入力を解析中…");
+  }, "入力を解析中…", true);
   render();
 }
 
@@ -513,16 +562,36 @@ async function addToQueue() {
 function renderJobDialog() {
   const job = normalizeArray(state.queue.jobs).find(item => item.id === state.selectedJobID);
   if (!job) {
-    jobDialog.close();
+    if (jobDialog.open) jobDialog.close();
+    jobDialogRenderKey = "";
     return;
   }
   const runtime = state.runtime;
   const current = runtime?.current?.job_id === job.id;
-  const failed = runtime?.persistent_state?.job_id === job.id;
+  const failed = Boolean(runtime?.failure && runtime?.persistent_state?.job_id === job.id);
   const logPath = current ? runtime.current.log_path : failed ? runtime?.failure?.log_path : "";
   const logText = logPath ? state.logs.get(logPath) || "" : "";
+  const renderKey = JSON.stringify({
+    id: job.id,
+    status: queueJobState(job, runtime),
+    current,
+    failed,
+    logPath,
+    stage: runtime?.current?.stage || "",
+    encoding_paused: Boolean(runtime?.current?.encoding_paused),
+    pause_after_current: Boolean(runtime?.pause_after_current),
+    deletable: canDeleteJob(job, runtime),
+  });
+  if (jobDialog.open && renderKey === jobDialogRenderKey) {
+    jobDialogStatus.textContent = `${queueJobState(job, runtime)} · 約${formatDuration(job.duration_seconds)}`;
+    const logView = jobDialogContent.querySelector(".log-view");
+    if (logView) logView.textContent = logText || "ログ更新を待っています…";
+    return;
+  }
+  jobDialogRenderKey = renderKey;
+  jobDialogTitle.textContent = outputName(job.output);
+  jobDialogStatus.textContent = `${queueJobState(job, runtime)} · 約${formatDuration(job.duration_seconds)}`;
   jobDialogContent.innerHTML = `
-    <div class="modal-header"><div><p class="eyebrow">JOB DETAIL</p><h2>${escapeHTML(outputName(job.output))}</h2><p>${escapeHTML(queueJobState(job, runtime))} · 約${formatDuration(job.duration_seconds)}</p></div><button class="icon-button" data-action="close-job" aria-label="詳細を閉じる">×</button></div>
     <div class="modal-body">
       <div class="form-grid">
         <div class="field full"><span class="field-label">入力</span><div class="path-bar">${escapeHTML(job.input)}</div></div>
@@ -542,6 +611,7 @@ function renderJobDialog() {
 
 function openJobDialog(id) {
   state.selectedJobID = id;
+  jobDialogRenderKey = "";
   renderJobDialog();
   if (!jobDialog.open) jobDialog.showModal();
 }
@@ -551,9 +621,9 @@ function currentControls(runtime, compact = false) {
   const css = compact ? "button secondary tiny" : "button secondary";
   return `
     <div class="${compact ? "compact-actions" : "button-row"}">
-      ${encoding ? `<button class="${css}" data-action="${runtime.current.encoding_paused ? "resume-encoding" : "pause-encoding"}">${runtime.current.encoding_paused ? "再開" : "一時停止"}</button>` : ""}
-      <button class="${css}" data-action="pause-after" data-enabled="${!runtime.pause_after_current}">${runtime.pause_after_current ? "ジョブ後停止を取消" : "ジョブ後に停止"}</button>
-      <button class="button danger ${compact ? "tiny" : ""}" data-action="abort-queue">即時中断</button>
+      ${encoding ? `<button type="button" class="${css}" data-action="${runtime.current.encoding_paused ? "resume-encoding" : "pause-encoding"}">${runtime.current.encoding_paused ? "再開" : "一時停止"}</button>` : ""}
+      <button type="button" class="${css}" data-action="pause-after" data-enabled="${!runtime.pause_after_current}">${runtime.pause_after_current ? "ジョブ後停止を取消" : "ジョブ後に停止"}</button>
+      <button type="button" class="button danger ${compact ? "tiny" : ""}" data-action="abort-queue">即時中断</button>
     </div>
   `;
 }
@@ -562,7 +632,7 @@ function waitingControls(job, runtime, compact = false) {
   if (!canDeleteJob(job, runtime)) return "";
   return `
     <div class="${compact ? "compact-actions" : "button-row"}">
-      <button class="button danger ${compact ? "tiny" : "small"}" data-action="delete-job" data-id="${escapeHTML(job.id)}">削除</button>
+      <button type="button" class="button danger ${compact ? "tiny" : "small"}" data-action="delete-job" data-id="${escapeHTML(job.id)}">削除</button>
     </div>
   `;
 }
@@ -676,7 +746,6 @@ document.addEventListener("click", async event => {
       case "new-job": state.draft = null; await openFiles(state.lastInputDirectory); break;
       case "open-settings": await openSettings(); break;
       case "close-settings": settingsDialog.close(); break;
-      case "close-job": jobDialog.close(); break;
       case "open-directory": await openFiles(path); break;
       case "analyze-file": await analyzeFile(path); break;
       case "back-files": await openFiles(state.lastInputDirectory); break;
@@ -709,6 +778,7 @@ document.addEventListener("click", async event => {
 });
 
 document.addEventListener("submit", async event => {
+  if (!["naming-form", "chapters-form", "audio-form", "subtitles-form", "settings-form"].includes(event.target.id)) return;
   event.preventDefault();
   try {
     if (event.target.id === "naming-form") await submitNaming(event.target);
