@@ -73,6 +73,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	drafts   map[string]*draftState
+	analyses map[string]float64
 	sequence atomic.Uint64
 }
 
@@ -108,8 +109,9 @@ func New(config Config) (*Server, error) {
 		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Server{
-		config: config,
-		drafts: make(map[string]*draftState),
+		config:   config,
+		drafts:   make(map[string]*draftState),
+		analyses: make(map[string]float64),
 	}, nil
 }
 
@@ -162,6 +164,7 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/files", server.files)
 	mux.HandleFunc("GET /api/presets", server.presets)
 	mux.HandleFunc("POST /api/drafts", server.createDraft)
+	mux.HandleFunc("GET /api/analysis-progress/{id}", server.getAnalysisProgress)
 	mux.HandleFunc("GET /api/drafts/{id}", server.getDraft)
 	mux.HandleFunc("DELETE /api/drafts/{id}", server.deleteDraft)
 	mux.HandleFunc("PUT /api/drafts/{id}/preset", server.setDraftPreset)

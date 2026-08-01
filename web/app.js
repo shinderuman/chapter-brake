@@ -1,6 +1,7 @@
 import {
   apiErrorMessage,
   canDeleteJob,
+  chapterOutputDurations,
   fileSize,
   formatDuration,
   normalizeArray,
@@ -97,10 +98,46 @@ function setBusy(message = "処理中…", showProgress = false) {
       <div class="loading-content">
         <div class="spinner"></div>
         <strong>${escapeHTML(message)}</strong>
-        ${showProgress ? `<progress class="busy-progress" aria-label="解析処理中"></progress>` : ""}
+        ${showProgress ? `<div class="busy-progress-row"><progress class="busy-progress" aria-label="解析進捗 0%" max="100" value="0">0%</progress><strong class="busy-progress-value">0%</strong></div>` : ""}
       </div>
     </div>
   `;
+}
+
+function updateBusyProgress(value) {
+  const progress = main.querySelector(".busy-progress");
+  const label = main.querySelector(".busy-progress-value");
+  if (!progress || !label) return;
+  const percent = progressPercent(value);
+  progress.value = percent;
+  progress.textContent = `${percent}%`;
+  progress.setAttribute("aria-label", `解析進捗 ${percent}%`);
+  label.textContent = `${percent}%`;
+}
+
+function monitorAnalysisProgress(id) {
+  let stopped = false;
+  let timer;
+  let requestController;
+  const poll = async () => {
+    if (stopped) return;
+    requestController = new AbortController();
+    try {
+      const payload = await api(`/analysis-progress/${encodeURIComponent(id)}`, { signal: requestController.signal });
+      updateBusyProgress(payload.progress);
+    } catch (error) {
+      if (!stopped && error.name !== "AbortError" && error.status !== 404) showToast(apiErrorMessage(error), true);
+    } finally {
+      requestController = null;
+      if (!stopped) timer = setTimeout(poll, 200);
+    }
+  };
+  timer = setTimeout(poll, 100);
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    requestController?.abort();
+  };
 }
 
 async function perform(action, busyMessage, showProgress = false) {
@@ -260,21 +297,43 @@ function pageHeader(step, title, copy = "", actions = "") {
 }
 
 const workflowSteps = ["入力", "プリセット", "出力名", "チャプター", "音声", "字幕", "確認"];
+const workflowViews = ["files", "presets", "naming", "chapters", "audio", "subtitles", "preview"];
 
 function decorateWorkflow() {
   if (!main.firstElementChild || main.firstElementChild.classList.contains("flow-layout")) return;
-  const current = { files: 0, presets: 1, naming: 2, chapters: 3, audio: 4, subtitles: 5, preview: 6 }[state.view] ?? 0;
+  const current = workflowViews.indexOf(state.view);
   const content = document.createElement("div");
   content.className = "flow-content";
   while (main.firstChild) content.append(main.firstChild);
   const rail = document.createElement("nav");
   rail.className = "flow-steps";
   rail.setAttribute("aria-label", "ジョブ追加手順");
-  rail.innerHTML = workflowSteps.map((label, index) => `<span class="${index === current ? "active" : ""} ${index < current ? "done" : ""}"><b>${String(index + 1).padStart(2, "0")}</b>${label}</span>`).join("");
+  rail.innerHTML = workflowSteps.map((label, index) => {
+    const skipped = index === 5 && state.draft?.preset?.container === "mp4";
+    const enabled = index <= current && !skipped;
+    return `<button type="button" class="${index === current ? "active" : ""} ${index < current ? "done" : ""}" data-action="go-workflow-step" data-step="${index}" ${enabled ? "" : "disabled"} ${index === current ? 'aria-current="step"' : ""}><b>${String(index + 1).padStart(2, "0")}</b>${label}</button>`;
+  }).join("");
   const layout = document.createElement("div");
   layout.className = "flow-layout";
   layout.append(rail, content);
   main.append(layout);
+}
+
+async function goToWorkflowStep(index) {
+  const current = workflowViews.indexOf(state.view);
+  if (!Number.isInteger(index) || index < 0 || index > current) return;
+  if (index === 0) {
+    state.draft = null;
+    await openFiles(state.lastInputDirectory);
+    return;
+  }
+  if (!state.draft || (index === 5 && state.draft.preset?.container === "mp4")) return;
+  state.view = workflowViews[index];
+  if (index === 1) {
+    await loadPresetSource("curated");
+    return;
+  }
+  render();
 }
 
 async function openFiles(directory) {
@@ -305,7 +364,15 @@ function renderFiles() {
 
 async function analyzeFile(path) {
   await perform(async () => {
-    state.draft = await api("/drafts", { method: "POST", body: { input: path } });
+    const analysisID = crypto.randomUUID();
+    const draftRequest = api("/drafts", { method: "POST", body: { input: path, analysis_id: analysisID } });
+    const stopProgress = monitorAnalysisProgress(analysisID);
+    try {
+      state.draft = await draftRequest;
+      updateBusyProgress(1);
+    } finally {
+      stopProgress();
+    }
     const payload = await api("/presets");
     state.presets = normalizeArray(payload.presets);
     state.presetSource = "curated";
@@ -397,7 +464,7 @@ function renderChapters() {
           <button class="button secondary" type="button" data-action="clear-chapters">すべて外す</button>
         </div>
       </div>
-      ${state.draft.tail_merged ? `<div class="notice">最終チャプターは短い単体出力にせず、直前の出力へ結合されます。</div>` : ""}
+      ${state.draft.tail_merged ? `<div id="tail-merged-notice" class="notice">最終チャプターは短い単体出力にせず、直前の出力へ結合されます。</div>` : ""}
       <label class="check-row">
         <input type="checkbox" name="exclude_final" ${state.draft.exclude_final ? "checked" : ""}>
         <span><strong>末尾の短いチャプターを除外</strong><small>2秒以下の場合は初期状態で有効になります。必要なチャプターなら解除できます。</small></span>
@@ -407,12 +474,12 @@ function renderChapters() {
           <thead><tr><th>選択</th><th class="mono">番号</th><th class="mono">開始</th><th class="mono">単体</th><th class="mono">出力合計</th><th>タイトル</th></tr></thead>
           <tbody>
             ${state.draft.chapters.map(chapter => `
-              <tr class="${selected.has(chapter.number) ? "selected-output" : ""}">
+              <tr data-chapter="${chapter.number}" class="${selected.has(chapter.number) ? "selected-output" : ""}">
                 <td><input aria-label="Chapter ${chapter.number}を出力開始位置にする" type="checkbox" name="chapter" value="${chapter.number}" ${selected.has(chapter.number) ? "checked" : ""}></td>
                 <td class="mono">${String(chapter.number).padStart(3, "0")}</td>
                 <td class="mono">${formatDuration(chapter.start_seconds)}</td>
                 <td class="mono">${formatDuration(chapter.duration_seconds)}</td>
-                <td class="mono">${chapter.output_duration_seconds == null ? "—" : formatDuration(chapter.output_duration_seconds)}</td>
+                <td class="mono" data-output-duration>${chapter.output_duration_seconds == null ? "—" : formatDuration(chapter.output_duration_seconds)}</td>
                 <td>${escapeHTML(chapter.title || "")}</td>
               </tr>
             `).join("")}
@@ -435,6 +502,35 @@ function chapterPayload(form, approximate = false) {
     exclude_final: form.elements.exclude_final.checked,
     approximate,
   };
+}
+
+function refreshChapterOutputDurations(form) {
+  const finalChapter = state.draft.chapters.at(-1)?.number;
+  const excludeFinal = form.elements.exclude_final.checked;
+  if (excludeFinal) {
+    const finalInput = form.querySelector(`input[name="chapter"][value="${finalChapter}"]`);
+    if (finalInput) finalInput.checked = false;
+  }
+  const selected = [...form.querySelectorAll('input[name="chapter"]:checked')].map(input => Number(input.value));
+  const durations = chapterOutputDurations(
+    state.draft.chapters,
+    state.draft.duration_seconds,
+    selected,
+    excludeFinal,
+  );
+  state.draft.selected_chapters = selected;
+  state.draft.exclude_final = excludeFinal;
+  state.draft.auto_chapters = false;
+  state.draft.tail_merged = false;
+  state.draft.preview = null;
+  state.draft.chapters.forEach(chapter => {
+    chapter.output_duration_seconds = durations.get(chapter.number) ?? null;
+    const row = form.querySelector(`tr[data-chapter="${chapter.number}"]`);
+    row?.classList.toggle("selected-output", durations.has(chapter.number));
+    const output = row?.querySelector("[data-output-duration]");
+    if (output) output.textContent = durations.has(chapter.number) ? formatDuration(durations.get(chapter.number)) : "—";
+  });
+  document.querySelector("#tail-merged-notice")?.remove();
 }
 
 async function updateChapters(form, approximate, next = false) {
@@ -744,6 +840,7 @@ document.addEventListener("click", async event => {
       case "reload": location.reload(); break;
       case "close-confirm": confirmDialog.close(value); break;
       case "new-job": state.draft = null; await openFiles(state.lastInputDirectory); break;
+      case "go-workflow-step": await goToWorkflowStep(Number(target.dataset.step)); break;
       case "open-settings": await openSettings(); break;
       case "close-settings": settingsDialog.close(); break;
       case "open-directory": await openFiles(path); break;
@@ -807,12 +904,14 @@ document.addEventListener("change", event => {
     document.querySelector("#no-subtitles").checked = false;
   }
   if (event.target.matches('#chapters-form input[name="chapter"]')) {
-    const rows = event.target.closest("tbody").querySelectorAll("tr");
-    rows.forEach(row => row.classList.toggle("selected-output", row.querySelector('input[name="chapter"]').checked));
     const last = state.draft.chapters.at(-1)?.number;
     if (Number(event.target.value) === last && event.target.checked) {
       document.querySelector('input[name="exclude_final"]').checked = false;
     }
+    refreshChapterOutputDurations(event.target.form);
+  }
+  if (event.target.matches('#chapters-form input[name="exclude_final"]')) {
+    refreshChapterOutputDurations(event.target.form);
   }
 });
 

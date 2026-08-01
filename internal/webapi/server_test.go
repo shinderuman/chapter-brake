@@ -247,11 +247,14 @@ func TestDraftWorkflowAndQueueOperations(t *testing.T) {
 	firstID := draft.Preview.Jobs[0].ID
 	secondID := draft.Preview.Jobs[1].ID
 
+	controller.mu.Lock()
+	controller.snapshot.QueuePaused = true
+	controller.mu.Unlock()
 	response = requestJSON(t, httpServer.URL, http.MethodPost, draftPath+"/queue", addQueueRequest{OverwriteApproved: false})
 	assertStatus(t, response, http.StatusCreated)
 	_ = response.Body.Close()
-	if controller.autoStarts != 1 {
-		t.Fatalf("automatic starts = %d", controller.autoStarts)
+	if controller.starts != 1 || controller.autoStarts != 0 {
+		t.Fatalf("empty queue starts = %d, automatic starts = %d", controller.starts, controller.autoStarts)
 	}
 	q, err := service.Queue()
 	if err != nil || len(q.Jobs) != 2 {
@@ -561,6 +564,38 @@ func TestSettingsAPI(t *testing.T) {
 	response = requestJSON(t, httpServer.URL, http.MethodPut, "/api/settings", updated)
 	assertStatus(t, response, http.StatusUnprocessableEntity)
 	_ = response.Body.Close()
+}
+
+func TestAnalysisProgress(t *testing.T) {
+	server := &Server{analyses: make(map[string]float64)}
+	server.setAnalysisProgress("analysis-123", 0.42)
+	request := httptest.NewRequest(http.MethodGet, "/api/analysis-progress/analysis-123", nil)
+	request.SetPathValue("id", "analysis-123")
+	recorder := httptest.NewRecorder()
+	server.getAnalysisProgress(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Progress float64 `json:"progress"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Progress != 0.42 {
+		t.Fatalf("progress = %v", payload.Progress)
+	}
+
+	server.scheduleAnalysisProgressClear("analysis-123")
+	if _, exists := server.analyses["analysis-123"]; !exists {
+		t.Fatal("scheduled progress was cleared before the client could stop polling")
+	}
+	server.clearAnalysisProgress("analysis-123")
+	recorder = httptest.NewRecorder()
+	server.getAnalysisProgress(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("cleared status = %d", recorder.Code)
+	}
 }
 
 func requestJSON(t *testing.T, baseURL, method, path string, body any) *http.Response {

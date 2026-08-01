@@ -76,6 +76,10 @@ type Preview struct {
 }
 
 func (s *Service) Analyze(ctx context.Context, input string) (Draft, error) {
+	return s.AnalyzeWithProgress(ctx, input, nil)
+}
+
+func (s *Service) AnalyzeWithProgress(ctx context.Context, input string, progress func(float64)) (Draft, error) {
 	if s.Scanner == nil {
 		return Draft{}, fmt.Errorf("media scanner is nil")
 	}
@@ -92,9 +96,23 @@ func (s *Service) Analyze(ctx context.Context, input string) (Draft, error) {
 	if !strings.EqualFold(filepath.Ext(input), ".mkv") {
 		return Draft{}, fmt.Errorf("selected input must be an MKV file")
 	}
-	mediaInfo, err := s.Scanner.Scan(ctx, input, io.Discard, io.Discard)
-	if err != nil {
-		return Draft{}, err
+	if progress != nil {
+		progress(0)
+	}
+	var mediaInfo media.Info
+	var scanErr error
+	if scanner, ok := s.Scanner.(interface {
+		ScanWithProgress(context.Context, string, io.Writer, io.Writer, func(float64)) (media.Info, error)
+	}); ok {
+		mediaInfo, scanErr = scanner.ScanWithProgress(ctx, input, io.Discard, io.Discard, progress)
+	} else {
+		mediaInfo, scanErr = s.Scanner.Scan(ctx, input, io.Discard, io.Discard)
+	}
+	if scanErr != nil {
+		return Draft{}, scanErr
+	}
+	if progress != nil {
+		progress(1)
 	}
 	outputDirectory, chapterInterval := s.outputSettings()
 	if chapterInterval <= 0 {

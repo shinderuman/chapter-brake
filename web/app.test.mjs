@@ -9,9 +9,27 @@ test("rendered markup does not use CSP-blocked inline styles", () => {
   assert.doesNotMatch(appSource, /\sstyle\s*=/i);
 });
 
-test("analysis busy state includes an indeterminate progress indicator", () => {
-  assert.match(appSource, /<progress class="busy-progress"[^>]*><\/progress>/);
+test("analysis busy state reports determinate progress", () => {
+  assert.match(appSource, /<progress class="busy-progress"[^>]*max="100" value="0">0%<\/progress>/);
   assert.match(appSource, /"入力を解析中…", true/);
+  assert.match(appSource, /analysis-progress\/\$\{encodeURIComponent\(id\)\}/);
+  assert.match(appSource, /updateBusyProgress\(payload\.progress\)/);
+  assert.match(appSource, /const draftRequest = api\("\/drafts"[\s\S]*?monitorAnalysisProgress/);
+  assert.match(appSource, /requestController\?\.abort\(\)/);
+});
+
+test("completed workflow steps are direct back-navigation controls", () => {
+  assert.match(appSource, /data-action="go-workflow-step" data-step="\$\{index\}"/);
+  assert.match(appSource, /const enabled = index <= current && !skipped/);
+  assert.match(appSource, /case "go-workflow-step": await goToWorkflowStep/);
+  assert.match(appSource, /if \(index === 0\) \{\s*state\.draft = null;\s*await openFiles/);
+});
+
+test("chapter checkbox changes refresh output totals immediately", () => {
+  assert.match(appSource, /function refreshChapterOutputDurations\(form\)/);
+  assert.match(appSource, /chapterOutputDurations\(/);
+  assert.match(appSource, /output\.textContent = durations\.has/);
+  assert.match(appSource, /input\[name="exclude_final"\][\s\S]*?refreshChapterOutputDurations/);
 });
 
 test("continuous queue and log updates preserve interactive dialog nodes", () => {

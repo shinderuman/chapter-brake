@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   apiErrorMessage,
   canDeleteJob,
+  chapterOutputDurations,
   fileSize,
   formatDuration,
   normalizeArray,
@@ -38,6 +39,17 @@ test("queue position and settings request", () => {
     output_directory: "/output",
     chapter_interval: "23:40",
   });
+});
+
+test("chapter output durations follow the current checkbox selection", () => {
+  const chapters = [
+    { number: 1, start_seconds: 0 },
+    { number: 2, start_seconds: 120 },
+    { number: 3, start_seconds: 300 },
+    { number: 4, start_seconds: 540 },
+  ];
+  assert.deepEqual([...chapterOutputDurations(chapters, 600, [1, 3], false)], [[1, 300], [3, 300]]);
+  assert.deepEqual([...chapterOutputDurations(chapters, 600, [1, 2, 4], true)], [[1, 120], [2, 420]]);
 });
 
 test("runtime labels distinguish pause and failure", () => {

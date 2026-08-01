@@ -82,6 +82,7 @@ output directory may be absent and is created when a queued job starts.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/drafts` | Analyze an absolute MKV input and create an in-memory draft |
+| `GET` | `/api/analysis-progress/{id}` | Current HandBrake scan progress; completed values remain briefly available so the client can stop polling without a 404 race |
 | `GET` | `/api/drafts/{id}` | Current typed draft |
 | `DELETE` | `/api/drafts/{id}` | Discard a draft |
 | `PUT` | `/api/drafts/{id}/preset` | Select curated/exported or standard preset |
@@ -95,8 +96,13 @@ output directory may be absent and is created when a queued job starts.
 Create:
 
 ```json
-{"input":"/Volumes/2TB HDD/Images/作品 第1巻_t00.mkv"}
+{"input":"/Volumes/2TB HDD/Images/作品 第1巻_t00.mkv","analysis_id":"browser-generated-uuid"}
 ```
+
+When `analysis_id` is present, the UI polls the progress endpoint while the
+draft request is running. Its `progress` value is the HandBrake `SCANNING`
+fraction from `0` through `1`; it is not an estimated or repeating indicator.
+The progress entry is removed when the draft request finishes or fails.
 
 Preset:
 

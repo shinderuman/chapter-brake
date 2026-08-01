@@ -1,6 +1,7 @@
 package webapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,7 +16,8 @@ import (
 )
 
 type createDraftRequest struct {
-	Input string `json:"input"`
+	Input      string `json:"input"`
+	AnalysisID string `json:"analysis_id,omitempty"`
 }
 
 type presetRequest struct {
@@ -112,7 +114,28 @@ func (server *Server) createDraft(writer http.ResponseWriter, request *http.Requ
 		server.writeError(writer, http.StatusBadRequest, "invalid_json", "analyze", err)
 		return
 	}
-	draft, err := server.config.Application.Analyze(request.Context(), body.Input)
+	if body.AnalysisID != "" {
+		if err := validateAnalysisID(body.AnalysisID); err != nil {
+			server.writeError(writer, http.StatusBadRequest, "invalid_analysis_id", "analyze", err)
+			return
+		}
+		server.setAnalysisProgress(body.AnalysisID, 0)
+		defer server.scheduleAnalysisProgressClear(body.AnalysisID)
+	}
+	progress := func(value float64) {
+		if body.AnalysisID != "" {
+			server.setAnalysisProgress(body.AnalysisID, value)
+		}
+	}
+	var draft app.Draft
+	var err error
+	if analyzer, ok := server.config.Application.(interface {
+		AnalyzeWithProgress(context.Context, string, func(float64)) (app.Draft, error)
+	}); ok {
+		draft, err = analyzer.AnalyzeWithProgress(request.Context(), body.Input, progress)
+	} else {
+		draft, err = server.config.Application.Analyze(request.Context(), body.Input)
+	}
 	if err != nil {
 		server.writeError(writer, http.StatusUnprocessableEntity, "analysis_failed", "analyze", err)
 		return
@@ -123,6 +146,54 @@ func (server *Server) createDraft(writer http.ResponseWriter, request *http.Requ
 	server.drafts[id] = state
 	server.mu.Unlock()
 	server.writeDraft(writer, http.StatusCreated, id, state)
+}
+
+func (server *Server) getAnalysisProgress(writer http.ResponseWriter, request *http.Request) {
+	id, err := routeID(request)
+	if err != nil || validateAnalysisID(id) != nil {
+		server.writeError(writer, http.StatusBadRequest, "invalid_analysis_id", "analyze", errors.New("invalid analysis id"))
+		return
+	}
+	server.mu.Lock()
+	progress, exists := server.analyses[id]
+	server.mu.Unlock()
+	if !exists {
+		server.writeError(writer, http.StatusNotFound, "analysis_not_found", "analyze", errors.New("analysis is not running"))
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]float64{"progress": progress})
+}
+
+func (server *Server) setAnalysisProgress(id string, progress float64) {
+	server.mu.Lock()
+	server.analyses[id] = max(0, min(1, progress))
+	server.mu.Unlock()
+}
+
+func (server *Server) clearAnalysisProgress(id string) {
+	server.mu.Lock()
+	delete(server.analyses, id)
+	server.mu.Unlock()
+}
+
+func (server *Server) scheduleAnalysisProgressClear(id string) {
+	time.AfterFunc(5*time.Second, func() {
+		server.clearAnalysisProgress(id)
+	})
+}
+
+func validateAnalysisID(id string) error {
+	if len(id) < 8 || len(id) > 128 {
+		return errors.New("analysis id length is invalid")
+	}
+	for _, char := range id {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '-' || char == '_' {
+			continue
+		}
+		return errors.New("analysis id contains an invalid character")
+	}
+	return nil
 }
 
 func (server *Server) getDraft(writer http.ResponseWriter, request *http.Request) {
@@ -392,12 +463,22 @@ func (server *Server) addDraftToQueue(writer http.ResponseWriter, request *http.
 		server.writeError(writer, http.StatusConflict, "preview_required", "queue-add", errors.New("build and confirm a preview before adding it to the queue"))
 		return
 	}
+	queueBeforeAdd, err := server.config.Application.Queue()
+	if err != nil {
+		server.writeError(writer, http.StatusInternalServerError, "queue_read_failed", "queue-add", err)
+		return
+	}
 	if err := server.config.Application.AddPreview(*preview, body.OverwriteApproved); err != nil {
 		server.writeError(writer, http.StatusConflict, "queue_add_failed", "queue-add", err)
 		return
 	}
 	server.config.Controller.QueueChanged()
-	startErr := server.config.Controller.StartAutomatically()
+	var startErr error
+	if len(queueBeforeAdd.Jobs) == 0 {
+		startErr = server.config.Controller.Start()
+	} else {
+		startErr = server.config.Controller.StartAutomatically()
+	}
 	if startErr != nil && startErr.Error() != "queue is empty" {
 		snapshot, snapshotErr := server.config.Controller.Snapshot()
 		if snapshotErr != nil || !snapshot.QueuePaused {

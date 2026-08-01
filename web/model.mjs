@@ -25,6 +25,22 @@ export function progressPercent(value) {
   return Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100);
 }
 
+export function chapterOutputDurations(chapters, totalSeconds, selectedChapters, excludeFinal) {
+  const items = normalizeArray(chapters);
+  if (items.length === 0) return new Map();
+  const finalChapter = items.length - (excludeFinal ? 1 : 0);
+  const starts = [...new Set(normalizeArray(selectedChapters))]
+    .filter(number => Number.isInteger(number) && number >= 1 && number <= finalChapter)
+    .sort((left, right) => left - right);
+  const outputEnd = excludeFinal ? items.at(-1).start_seconds : totalSeconds;
+  return new Map(starts.map((number, index) => {
+    const start = items[number - 1].start_seconds;
+    const next = starts[index + 1];
+    const end = next ? items[next - 1].start_seconds : outputEnd;
+    return [number, Math.max(0, end - start)];
+  }));
+}
+
 export function runtimeLabel(runtime) {
   if (runtime?.failure) return "異常停止";
   if (runtime?.running && runtime.current?.encoding_paused) return "エンコード一時停止";

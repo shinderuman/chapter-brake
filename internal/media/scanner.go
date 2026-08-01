@@ -21,6 +21,15 @@ type Scanner struct {
 }
 
 func (s Scanner) Scan(ctx context.Context, input string, stdout, stderr io.Writer) (Info, error) {
+	return s.ScanWithProgress(ctx, input, stdout, stderr, nil)
+}
+
+func (s Scanner) ScanWithProgress(
+	ctx context.Context,
+	input string,
+	stdout, stderr io.Writer,
+	progress func(float64),
+) (Info, error) {
 	if s.Executor == nil {
 		return Info{}, fmt.Errorf("scan executor is nil")
 	}
@@ -37,10 +46,14 @@ func (s Scanner) Scan(ctx context.Context, input string, stdout, stderr io.Write
 	if stdout == nil {
 		stdout = io.Discard
 	}
+	output := io.MultiWriter(stdout, capture)
+	if progress != nil {
+		output = io.MultiWriter(stdout, capture, newScanProgressWriter(progress))
+	}
 	if err := s.Executor.Run(
 		ctx,
 		process.Invocation{Executable: executable, Args: args},
-		io.MultiWriter(stdout, capture),
+		output,
 		stderr,
 	); err != nil {
 		return Info{}, fmt.Errorf("scan %s: %w", input, err)

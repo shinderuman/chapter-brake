@@ -152,6 +152,19 @@ func TestAnalyzeInitialSelections(t *testing.T) {
 	}
 }
 
+func TestAnalyzeWithProgressFallback(t *testing.T) {
+	service, draft, _ := testService(t)
+	var progress []float64
+	if _, err := service.AnalyzeWithProgress(context.Background(), draft.Input, func(value float64) {
+		progress = append(progress, value)
+	}); err != nil {
+		t.Fatalf("AnalyzeWithProgress() error = %v", err)
+	}
+	if !reflect.DeepEqual(progress, []float64{0, 1}) {
+		t.Fatalf("progress = %v", progress)
+	}
+}
+
 func TestAnalyzeUsesConfiguredChapterInterval(t *testing.T) {
 	service, draft, _ := testService(t)
 	service.ChapterInterval = 45 * time.Minute

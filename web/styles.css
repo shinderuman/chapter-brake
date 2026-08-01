@@ -207,10 +207,12 @@ input:focus-visible {
 
 .flow-layout { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 30px; align-items: start; }
 .flow-steps { position: sticky; top: 106px; display: grid; gap: 4px; }
-.flow-steps span { display: flex; gap: 9px; align-items: center; min-height: 34px; padding: 7px 9px; border-left: 2px solid var(--line); color: #6f7881; font-size: 11px; }
+.flow-steps button { display: flex; gap: 9px; align-items: center; min-height: 34px; padding: 7px 9px; border: 0; border-left: 2px solid var(--line); background: transparent; color: #6f7881; font-size: 11px; text-align: left; cursor: pointer; }
 .flow-steps b { font: 700 10px ui-monospace, monospace; }
-.flow-steps span.done { color: var(--muted); border-left-color: var(--line-strong); }
-.flow-steps span.active { border-left-color: var(--accent); background: rgb(231 255 70 / 6%); color: var(--text); }
+.flow-steps button.done { color: var(--muted); border-left-color: var(--line-strong); }
+.flow-steps button.active { border-left-color: var(--accent); background: rgb(231 255 70 / 6%); color: var(--text); }
+.flow-steps button:not(:disabled):hover { background: var(--panel-soft); color: var(--text); }
+.flow-steps button:disabled { cursor: default; }
 .flow-content { min-width: 0; }
 
 .hero {
@@ -441,7 +443,9 @@ tr.selected-output { background: rgb(231 255 70 / 5%); }
 }
 
 .loading-content strong { color: var(--text); font-size: 15px; }
+.busy-progress-row { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) 4ch; gap: 12px; align-items: center; }
 .busy-progress { width: 100%; height: 10px; accent-color: var(--accent); }
+.busy-progress-value { font: 700 13px/1 ui-monospace, monospace; text-align: right; }
 
 .spinner {
   width: 28px;
@@ -514,7 +518,7 @@ tr.selected-output { background: rgb(231 255 70 / 5%); }
 @media (max-width: 1120px) {
   .workspace { grid-template-columns: minmax(0, 1fr) 350px; }
   .flow-layout { grid-template-columns: 100px minmax(0, 1fr); gap: 20px; }
-  .flow-steps span { padding-inline: 6px; }
+  .flow-steps button { padding-inline: 6px; }
 }
 
 .sr-only {
