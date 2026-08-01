@@ -6,7 +6,9 @@ import {
   normalizeArray,
   outputName,
   queueJobState,
+  queuePosition,
   runtimeLabel,
+  settingsPayload,
 } from "./model.mjs";
 
 const main = document.querySelector("#main");
@@ -19,9 +21,17 @@ const confirmDialog = document.querySelector("#confirm-dialog");
 const confirmTitle = document.querySelector("#confirm-title");
 const confirmMessage = document.querySelector("#confirm-message");
 const confirmButton = document.querySelector("#confirm-button");
+const jobDialog = document.querySelector("#job-dialog");
+const jobDialogContent = document.querySelector("#job-dialog-content");
+const settingsDialog = document.querySelector("#settings-dialog");
+const settingsForm = document.querySelector("#settings-form");
+const queueCount = document.querySelector("#queue-count");
+
+let queueSortable = null;
+let queueDragging = false;
 
 const state = {
-  view: "home",
+  view: "files",
   status: null,
   queue: { version: 1, jobs: [] },
   runtime: null,
@@ -105,10 +115,9 @@ function render() {
     case "audio": renderAudio(); break;
     case "subtitles": renderSubtitles(); break;
     case "preview": renderPreview(); break;
-    case "queue": renderQueue(); break;
-    case "job": renderJob(); break;
-    default: renderHome();
+    default: renderFiles();
   }
+  decorateWorkflow();
 }
 
 function renderHeader() {
@@ -130,24 +139,62 @@ function renderAlert() {
 }
 
 function renderQueueSummary() {
+  if (queueDragging) return;
   const jobs = normalizeArray(state.queue?.jobs);
+  queueCount.textContent = String(jobs.length);
+  queueSortable?.destroy();
+  queueSortable = null;
   if (jobs.length === 0) {
     queueSummary.innerHTML = `<div class="queue-summary-empty">キューは空です</div>`;
     return;
   }
-  queueSummary.innerHTML = jobs.slice(0, 12).map((job, index) => {
+  const runtime = state.runtime;
+  const queueControl = !runtime?.running
+    ? `<button class="button small" data-action="start-queue">${runtime?.queue_paused ? "キューを再開" : "キューを開始"}</button>`
+    : `<span class="status-chip ${runtime.current?.encoding_paused ? "paused" : "ready"}">${escapeHTML(runtimeLabel(runtime))}</span>`;
+  queueSummary.innerHTML = `<div class="rail-controls">${queueControl}</div>` + jobs.map((job, index) => {
     const status = queueJobState(job, state.runtime);
     const current = state.runtime?.current?.job_id === job.id;
     const progress = current ? Math.max(0, Math.min(1, state.runtime.current.progress || 0)) : 0;
+    const directControls = current ? currentControls(state.runtime, true) : waitingControls(job, state.runtime, true);
     return `
-      <div class="queue-mini ${current ? "current" : ""}">
+      <article class="queue-mini ${current ? "current not-draggable" : ""}" data-job-id="${escapeHTML(job.id)}">
         <div class="queue-mini-top"><span>${String(index + 1).padStart(2, "0")} · ${escapeHTML(status)}</span><span>約${formatDuration(job.duration_seconds)}</span></div>
-        <strong>${escapeHTML(outputName(job.output))}</strong>
-        <small>Chapter ${job.chapter_start}–${job.chapter_end}</small>
+        <button class="queue-mini-detail" data-action="show-job" data-id="${escapeHTML(job.id)}"><strong>${escapeHTML(outputName(job.output))}</strong><small>Chapter ${job.chapter_start}–${job.chapter_end}</small></button>
         ${current ? `<div class="progress" aria-label="進捗 ${Math.round(progress * 100)}%"><span style="width:${progress * 100}%"></span></div>` : ""}
-      </div>
+        <div class="queue-mini-actions">${!current ? `<button class="drag-handle" type="button" aria-label="ドラッグして並び替え">↕</button>` : ""}${directControls}</div>
+      </article>
     `;
   }).join("");
+
+  if (typeof window.Sortable !== "function") {
+    showToast("キュー並び替えライブラリを読み込めません", true);
+    return;
+  }
+  queueSortable = new window.Sortable(queueSummary, {
+    handle: ".drag-handle",
+    draggable: ".queue-mini:not(.not-draggable)",
+    animation: 180,
+    ghostClass: "queue-ghost",
+    chosenClass: "queue-chosen",
+    onStart: () => { queueDragging = true; },
+    onEnd: async event => {
+      queueDragging = false;
+      const id = event.item.dataset.jobId;
+      const position = queuePosition(
+        [...queueSummary.querySelectorAll(".queue-mini")].map(item => item.dataset.jobId),
+        id,
+      );
+      const previous = jobs.findIndex(job => job.id === id);
+      if (previous === position) return;
+      try {
+        await queueAction(`/queue/${encodeURIComponent(id)}/move`, { method: "POST", body: { position } });
+      } catch {
+        await refreshQueue();
+        renderQueueSummary();
+      }
+    },
+  });
 }
 
 function pageHeader(step, title, copy = "", actions = "") {
@@ -163,24 +210,22 @@ function pageHeader(step, title, copy = "", actions = "") {
   `;
 }
 
-function renderHome() {
-  const jobs = normalizeArray(state.queue?.jobs);
-  main.innerHTML = `
-    <section class="hero">
-      <p class="eyebrow">CHAPTER-BASED ENCODING</p>
-      <h1>チャプターを、作品として切り出す。</h1>
-      <p class="hero-copy">MKVを解析し、HandBrakeのチャプター境界だけを使って複数の動画へ変換します。設定作業は続けて行え、エンコードは永続キューで順番に進みます。</p>
-      <div class="hero-actions">
-        <button class="button" data-action="new-job">新しいジョブを追加</button>
-        <button class="button secondary" data-action="show-queue">キューを確認${jobs.length ? `（${jobs.length}件）` : ""}</button>
-      </div>
-    </section>
-    <div class="metrics">
-      <div class="metric"><span>キュー</span><strong>${jobs.length}件</strong></div>
-      <div class="metric"><span>状態</span><strong>${escapeHTML(runtimeLabel(state.runtime))}</strong></div>
-      <div class="metric"><span>概算ETA</span><strong>${state.runtime?.queue_eta_seconds ? formatDuration(state.runtime.queue_eta_seconds) : "--:--"}</strong></div>
-    </div>
-  `;
+const workflowSteps = ["入力", "プリセット", "出力名", "チャプター", "音声", "字幕", "確認"];
+
+function decorateWorkflow() {
+  if (!main.firstElementChild || main.firstElementChild.classList.contains("flow-layout")) return;
+  const current = { files: 0, presets: 1, naming: 2, chapters: 3, audio: 4, subtitles: 5, preview: 6 }[state.view] ?? 0;
+  const content = document.createElement("div");
+  content.className = "flow-content";
+  while (main.firstChild) content.append(main.firstChild);
+  const rail = document.createElement("nav");
+  rail.className = "flow-steps";
+  rail.setAttribute("aria-label", "ジョブ追加手順");
+  rail.innerHTML = workflowSteps.map((label, index) => `<span class="${index === current ? "active" : ""} ${index < current ? "done" : ""}"><b>${String(index + 1).padStart(2, "0")}</b>${label}</span>`).join("");
+  const layout = document.createElement("div");
+  layout.className = "flow-layout";
+  layout.append(rail, content);
+  main.append(layout);
 }
 
 async function openFiles(directory) {
@@ -206,7 +251,6 @@ function renderFiles() {
         </button>
       `).join("") || `<div class="notice">このフォルダにMKVファイルはありません。</div>`}
     </div>
-    <div class="button-row"><button class="button ghost" data-action="home">メインへ戻る</button></div>
   `;
 }
 
@@ -466,43 +510,10 @@ async function addToQueue() {
   showToast("キューへ追加しました。続けて登録できます");
 }
 
-function renderQueue() {
-  const jobs = normalizeArray(state.queue.jobs);
-  const runtime = state.runtime;
-  const controls = queueControls(runtime, jobs);
-  main.innerHTML = `
-    ${pageHeader("QUEUE", "キュー・実行状況", jobs.length ? `${jobs.length}件を順番に処理します。` : "キューは空です。", controls)}
-    ${runtime?.summary ? `<div class="notice">${escapeHTML(runtime.summary)}</div>` : ""}
-    <div class="queue-list">
-      ${jobs.map((job, index) => {
-        const status = queueJobState(job, runtime);
-        const current = runtime?.current?.job_id === job.id;
-        return `
-          <button class="list-card queue-row" data-action="show-job" data-id="${escapeHTML(job.id)}">
-            <span class="queue-index">${String(index + 1).padStart(2, "0")}</span>
-            <span><strong>${escapeHTML(outputName(job.output))}</strong><small>${escapeHTML(status)} · Chapter ${job.chapter_start}–${job.chapter_end} · 約${formatDuration(job.duration_seconds)}${current ? ` · ${escapeHTML(runtime.current.stage)} · ${(runtime.current.progress * 100).toFixed(1)}%` : ""}</small></span>
-            <span class="meta">詳細 →</span>
-          </button>
-        `;
-      }).join("") || `<div class="notice">キューは空です。新しいジョブを追加してください。</div>`}
-    </div>
-    <div class="button-row"><button class="button secondary" data-action="new-job">新しいジョブを追加</button><button class="button ghost" data-action="home">メインへ戻る</button></div>
-  `;
-}
-
-function queueControls(runtime, jobs) {
-  if (!jobs.length) return "";
-  if (!runtime?.running) {
-    return `<button class="button" data-action="start-queue">${runtime?.queue_paused ? "キューを再開" : "キューを開始"}</button>`;
-  }
-  return `<span class="status-chip ${runtime.current?.encoding_paused ? "paused" : "ready"}">${escapeHTML(runtimeLabel(runtime))}</span>`;
-}
-
-function renderJob() {
+function renderJobDialog() {
   const job = normalizeArray(state.queue.jobs).find(item => item.id === state.selectedJobID);
   if (!job) {
-    state.view = "queue";
-    renderQueue();
+    jobDialog.close();
     return;
   }
   const runtime = state.runtime;
@@ -510,9 +521,9 @@ function renderJob() {
   const failed = runtime?.persistent_state?.job_id === job.id;
   const logPath = current ? runtime.current.log_path : failed ? runtime?.failure?.log_path : "";
   const logText = logPath ? state.logs.get(logPath) || "" : "";
-  main.innerHTML = `
-    ${pageHeader("JOB DETAIL", outputName(job.output), `${queueJobState(job, runtime)} · 約${formatDuration(job.duration_seconds)}`)}
-    <div class="panel">
+  jobDialogContent.innerHTML = `
+    <div class="modal-header"><div><p class="eyebrow">JOB DETAIL</p><h2>${escapeHTML(outputName(job.output))}</h2><p>${escapeHTML(queueJobState(job, runtime))} · 約${formatDuration(job.duration_seconds)}</p></div><button class="icon-button" data-action="close-job" aria-label="詳細を閉じる">×</button></div>
+    <div class="modal-body">
       <div class="form-grid">
         <div class="field full"><span class="field-label">入力</span><div class="path-bar">${escapeHTML(job.input)}</div></div>
         <div class="field full"><span class="field-label">出力</span><div class="path-bar">${escapeHTML(job.output)}</div></div>
@@ -526,30 +537,32 @@ function renderJob() {
       ${current ? currentControls(runtime) : waitingControls(job, runtime)}
       ${logPath ? `<p class="field-label">ジョブログ: ${escapeHTML(logPath)}</p><pre class="log-view">${escapeHTML(logText || "ログ更新を待っています…")}</pre>` : ""}
     </div>
-    <div class="button-row"><button class="button ghost" data-action="show-queue">キュー一覧へ戻る</button></div>
   `;
 }
 
-function currentControls(runtime) {
+function openJobDialog(id) {
+  state.selectedJobID = id;
+  renderJobDialog();
+  if (!jobDialog.open) jobDialog.showModal();
+}
+
+function currentControls(runtime, compact = false) {
   const encoding = runtime.current?.stage === "handbrake";
+  const css = compact ? "button secondary tiny" : "button secondary";
   return `
-    <div class="button-row">
-      ${encoding ? `<button class="button secondary" data-action="${runtime.current.encoding_paused ? "resume-encoding" : "pause-encoding"}">${runtime.current.encoding_paused ? "エンコードを再開" : "エンコードを一時停止"}</button>` : ""}
-      <button class="button secondary" data-action="pause-after" data-enabled="${!runtime.pause_after_current}">${runtime.pause_after_current ? "現在ジョブ後の停止を取り消す" : "現在ジョブ後に一時停止"}</button>
-      <button class="button danger" data-action="abort-queue">即時中断して一時停止</button>
+    <div class="${compact ? "compact-actions" : "button-row"}">
+      ${encoding ? `<button class="${css}" data-action="${runtime.current.encoding_paused ? "resume-encoding" : "pause-encoding"}">${runtime.current.encoding_paused ? "再開" : "一時停止"}</button>` : ""}
+      <button class="${css}" data-action="pause-after" data-enabled="${!runtime.pause_after_current}">${runtime.pause_after_current ? "ジョブ後停止を取消" : "ジョブ後に停止"}</button>
+      <button class="button danger ${compact ? "tiny" : ""}" data-action="abort-queue">即時中断</button>
     </div>
   `;
 }
 
-function waitingControls(job, runtime) {
+function waitingControls(job, runtime, compact = false) {
   if (!canDeleteJob(job, runtime)) return "";
-  const jobs = normalizeArray(state.queue.jobs);
-  const index = jobs.findIndex(item => item.id === job.id);
   return `
-    <div class="button-row">
-      <button class="button secondary small" data-action="move-job" data-id="${escapeHTML(job.id)}" data-direction="up" ${index <= (runtime?.running ? 1 : 0) ? "disabled" : ""}>上へ</button>
-      <button class="button secondary small" data-action="move-job" data-id="${escapeHTML(job.id)}" data-direction="down" ${index === jobs.length - 1 ? "disabled" : ""}>下へ</button>
-      <button class="button danger small" data-action="delete-job" data-id="${escapeHTML(job.id)}">キューから削除</button>
+    <div class="${compact ? "compact-actions" : "button-row"}">
+      <button class="button danger ${compact ? "tiny" : "small"}" data-action="delete-job" data-id="${escapeHTML(job.id)}">削除</button>
     </div>
   `;
 }
@@ -580,15 +593,48 @@ function askConfirmation(title, message, actionLabel = "実行") {
 }
 
 async function deleteJob(id) {
+  if (jobDialog.open) jobDialog.close();
   if (!await askConfirmation("キューから削除", "待機中のジョブを削除します。元に戻せません。", "削除")) return;
   await queueAction(`/queue/${encodeURIComponent(id)}`, { method: "DELETE" });
-  state.view = "queue";
-  render();
 }
 
 async function abortQueue() {
   if (!await askConfirmation("即時中断", "現在の外部プロセスを停止し、部分出力を削除します。ジョブはキュー先頭に残ります。", "中断")) return;
   await queueAction("/queue/abort", { method: "POST" });
+}
+
+async function openSettings() {
+  try {
+    const settings = await api("/settings");
+    settingsForm.elements.input_directory.value = settings.input_directory;
+    settingsForm.elements.output_directory.value = settings.output_directory;
+    settingsForm.elements.chapter_interval.value = settings.chapter_interval;
+    settingsDialog.showModal();
+  } catch (error) {
+    showToast(apiErrorMessage(error), true);
+    throw error;
+  }
+}
+
+async function saveSettings(form) {
+  const data = new FormData(form);
+  try {
+    const settings = await api("/settings", {
+      method: "PUT",
+      body: settingsPayload({
+        input_directory: data.get("input_directory"),
+        output_directory: data.get("output_directory"),
+        chapter_interval: data.get("chapter_interval"),
+      }),
+    });
+    state.lastInputDirectory = settings.input_directory;
+    if (state.view === "files") await openFiles(settings.input_directory);
+    settingsDialog.close();
+    showToast("設定を保存しました");
+  } catch (error) {
+    showToast(apiErrorMessage(error), true);
+    throw error;
+  }
 }
 
 function connectEvents() {
@@ -605,15 +651,13 @@ function connectEvents() {
     renderHeader();
     renderAlert();
     renderQueueSummary();
-    if (state.view === "home") renderHome();
-    if (state.view === "queue") renderQueue();
-    if (state.view === "job") renderJob();
+    if (jobDialog.open) renderJobDialog();
   });
   source.addEventListener("log", event => {
     const payload = JSON.parse(event.data);
     const existing = state.logs.get(payload.path) || "";
     state.logs.set(payload.path, existing + payload.text);
-    if (state.view === "job") renderJob();
+    if (jobDialog.open) renderJobDialog();
   });
   source.onerror = () => {
     connectionStatus.textContent = "再接続中";
@@ -627,11 +671,12 @@ document.addEventListener("click", async event => {
   const { action, path, name, source, id, direction, enabled, value } = target.dataset;
   try {
     switch (action) {
-      case "home": state.view = "home"; render(); break;
       case "reload": location.reload(); break;
       case "close-confirm": confirmDialog.close(value); break;
-      case "new-job": await openFiles(state.lastInputDirectory); break;
-      case "show-queue": await refreshQueue(); state.view = "queue"; render(); break;
+      case "new-job": state.draft = null; await openFiles(state.lastInputDirectory); break;
+      case "open-settings": await openSettings(); break;
+      case "close-settings": settingsDialog.close(); break;
+      case "close-job": jobDialog.close(); break;
       case "open-directory": await openFiles(path); break;
       case "analyze-file": await analyzeFile(path); break;
       case "back-files": await openFiles(state.lastInputDirectory); break;
@@ -648,7 +693,7 @@ document.addEventListener("click", async event => {
         document.querySelectorAll('input[name="chapter"]').forEach(input => { input.checked = false; });
         break;
       case "add-queue": await addToQueue(); break;
-      case "show-job": state.selectedJobID = id; state.view = "job"; render(); break;
+      case "show-job": openJobDialog(id); break;
       case "start-queue": await queueAction("/queue/start", { method: "POST" }); break;
       case "pause-encoding": await queueAction("/queue/encoding/pause", { method: "POST" }); break;
       case "resume-encoding": await queueAction("/queue/encoding/resume", { method: "POST" }); break;
@@ -670,6 +715,7 @@ document.addEventListener("submit", async event => {
     if (event.target.id === "chapters-form") await updateChapters(event.target, false, true);
     if (event.target.id === "audio-form") await submitTracks(event.target, "audio");
     if (event.target.id === "subtitles-form") await submitTracks(event.target, "subtitles");
+    if (event.target.id === "settings-form") await saveSettings(event.target);
   } catch {
     render();
   }
@@ -708,6 +754,7 @@ async function initialize() {
     state.queue = queuePayload.queue;
     state.runtime = queuePayload.runtime;
     state.lastInputDirectory = status.initial_directory;
+    state.files = await api(`/files?directory=${encodeURIComponent(status.initial_directory)}`);
     state.busy = false;
     render();
     connectEvents();

@@ -9,7 +9,9 @@ import {
   normalizeArray,
   outputName,
   queueJobState,
+  queuePosition,
   runtimeLabel,
+  settingsPayload,
 } from "./model.mjs";
 
 test("duration and file-size formatting", () => {
@@ -18,6 +20,20 @@ test("duration and file-size formatting", () => {
   assert.equal(formatDuration(5690), "1:34:50");
   assert.equal(formatDuration(-1), "--:--");
   assert.equal(fileSize(1936423), "1.8 MiB");
+});
+
+test("queue position and settings request", () => {
+  assert.equal(queuePosition(["job-1", "job-3", "job-2"], "job-2"), 2);
+  assert.equal(queuePosition(["job-1"], "missing"), -1);
+  assert.deepEqual(settingsPayload({
+    input_directory: "/input",
+    output_directory: "/output",
+    chapter_interval: "23:40",
+  }), {
+    input_directory: "/input",
+    output_directory: "/output",
+    chapter_interval: "23:40",
+  });
 });
 
 test("runtime labels distinguish pause and failure", () => {

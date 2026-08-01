@@ -11,7 +11,13 @@ const port = Number(process.env.PORT || 4173);
 
 const clients = new Set();
 let draft = null;
-let sequence = 3;
+let sequence = 4;
+let settings = {
+  version: 4,
+  input_directory: "/Volumes/2TB HDD/Images/日本語 & 記号",
+  output_directory: "/Volumes/2TB HDD/Movies",
+  chapter_interval: "23:40",
+};
 let runtime = {
   running: true,
   queue_paused: false,
@@ -33,6 +39,7 @@ let queue = {
   jobs: [
     mockJob("job-1", "作品名 #01.mkv", 1, 6, 1421),
     mockJob("job-2", "作品名 #02.mkv", 7, 12, 1420),
+    mockJob("job-3", "作品名 #03.mkv", 13, 18, 1421),
   ],
 };
 
@@ -177,7 +184,16 @@ async function serveAPI(request, response, path) {
     return;
   }
   if (request.method === "GET" && path === "/api/status") {
-    json(response, 200, { ready: true, initial_directory: "/Volumes/2TB HDD/Images/日本語 & 記号", queue: runtime });
+    json(response, 200, { ready: true, initial_directory: settings.input_directory, queue: runtime });
+    return;
+  }
+  if (request.method === "GET" && path === "/api/settings") {
+    json(response, 200, settings);
+    return;
+  }
+  if (request.method === "PUT" && path === "/api/settings") {
+    settings = { version: 4, ...await readBody(request) };
+    json(response, 200, settings);
     return;
   }
   if (request.method === "GET" && path === "/api/files") {
@@ -273,9 +289,10 @@ async function serveAPI(request, response, path) {
       return;
     }
     if (request.method === "POST" && path.endsWith("/move")) {
-      const direction = (await readBody(request)).direction;
-      const destination = direction === "up" ? index - 1 : index + 1;
-      [queue.jobs[index], queue.jobs[destination]] = [queue.jobs[destination], queue.jobs[index]];
+      const body = await readBody(request);
+      const destination = body.position ?? (body.direction === "up" ? index - 1 : index + 1);
+      const [job] = queue.jobs.splice(index, 1);
+      queue.jobs.splice(destination, 0, job);
     }
   } else {
     json(response, 404, { error: { code: "not_found", stage: "route", message: "APIがありません" } });

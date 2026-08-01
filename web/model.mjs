@@ -56,3 +56,15 @@ export function apiErrorMessage(error) {
 export function canDeleteJob(job, runtime) {
   return !(runtime?.running && runtime.current?.job_id === job.id);
 }
+
+export function queuePosition(jobIDs, id) {
+  return normalizeArray(jobIDs).indexOf(id);
+}
+
+export function settingsPayload(values) {
+  return {
+    input_directory: String(values.input_directory ?? ""),
+    output_directory: String(values.output_directory ?? ""),
+    chapter_interval: String(values.chapter_interval ?? ""),
+  };
+}
