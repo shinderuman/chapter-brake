@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"chapterbrake/internal/config"
 	"chapterbrake/internal/handbrake"
 	"chapterbrake/internal/media"
 	"chapterbrake/internal/queue"
@@ -36,6 +37,13 @@ func (s *serviceStore) DeleteJob(id string) error {
 }
 func (s *serviceStore) MoveJob(id string, delta int) error {
 	next, err := s.q.MoveJob(id, delta)
+	if err == nil {
+		s.q = next
+	}
+	return err
+}
+func (s *serviceStore) MoveJobTo(id string, destination int) error {
+	next, err := s.q.MoveJobTo(id, destination)
 	if err == nil {
 		s.q = next
 	}
@@ -88,6 +96,8 @@ func testService(t *testing.T) (*Service, Draft, *serviceStore) {
 		Presets:         serviceCatalog{},
 		OutputDirectory: root,
 		ChapterInterval: media.DefaultEpisodeInterval,
+		InputDirectory:  root,
+		SettingsStore:   config.Store{Path: filepath.Join(root, "settings.json")},
 		Now: func() time.Time {
 			return time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
 		},
@@ -97,6 +107,30 @@ func testService(t *testing.T) (*Service, Draft, *serviceStore) {
 		t.Fatal(err)
 	}
 	return service, draft, store
+}
+
+func TestServiceSettings(t *testing.T) {
+	service, _, _ := testService(t)
+	output := filepath.Join(t.TempDir(), "not-created")
+	settings := config.Settings{
+		Version:         config.Version,
+		InputDirectory:  service.InputDirectory,
+		OutputDirectory: output,
+		ChapterInterval: "45:00",
+	}
+	if err := service.UpdateSettings(settings); err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
+	if got := service.CurrentSettings(); !reflect.DeepEqual(got, settings) {
+		t.Fatalf("CurrentSettings() = %#v, want %#v", got, settings)
+	}
+	stored, err := service.SettingsStore.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(stored, settings) {
+		t.Fatalf("stored settings = %#v, want %#v", stored, settings)
+	}
 }
 
 func TestAnalyzeInitialSelections(t *testing.T) {

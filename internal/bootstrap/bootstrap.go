@@ -24,14 +24,8 @@ import (
 	"chapterbrake/internal/queue"
 	"chapterbrake/internal/runner"
 	"chapterbrake/internal/runstate"
-	"chapterbrake/internal/tui"
 	"chapterbrake/internal/webapi"
 )
-
-type terminal interface {
-	Run() error
-	Shutdown()
-}
 
 type webBackend interface {
 	Serve(context.Context) error
@@ -44,7 +38,6 @@ type dependencies struct {
 	executor      process.Executor
 	jobExecutor   process.Executor
 	inspectTools  func(context.Context, process.Executor) ([]app.ToolInfo, error)
-	newTerminal   func(*app.Service, *runner.Runner, string) (terminal, error)
 	newWebBackend func(webapi.Config) (webBackend, error)
 }
 
@@ -52,19 +45,19 @@ type runOptions struct {
 	inputDirectory string
 }
 
-// Run initializes and runs ChapterBrake until the user exits or macOS asks it
-// to terminate.
+// Run initializes the ChapterBrake backend launched by Local Web App Server.
 func Run(args []string) error {
 	opts, err := parseOptions(args)
 	if err != nil {
 		return err
 	}
+	socket := os.Getenv("LOCAL_WEB_SOCKET")
+	if socket == "" {
+		return errors.New("LOCAL_WEB_SOCKET is required; launch ChapterBrake through Local Web App Server")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	if socket := os.Getenv("LOCAL_WEB_SOCKET"); socket != "" {
-		return runWeb(ctx, productionDependencies(), opts, socket)
-	}
-	return run(ctx, productionDependencies(), opts)
+	return runWeb(ctx, productionDependencies(), opts, socket)
 }
 
 func parseOptions(args []string) (runOptions, error) {
@@ -99,49 +92,14 @@ func productionDependencies() dependencies {
 		executor:      &process.OSExecutor{},
 		jobExecutor:   &process.OSExecutor{},
 		inspectTools:  app.InspectTools,
-		newTerminal: func(
-			service *app.Service,
-			queueRunner *runner.Runner,
-			initialDirectory string,
-		) (terminal, error) {
-			return tui.New(service, queueRunner, initialDirectory)
-		},
 		newWebBackend: func(config webapi.Config) (webBackend, error) {
 			return webapi.New(config)
 		},
 	}
 }
 
-func run(ctx context.Context, deps dependencies, opts runOptions) error {
-	return runWithFrontend(ctx, deps, opts, func(
-		ctx context.Context,
-		service *app.Service,
-		queueRunner *runner.Runner,
-		initialDirectory string,
-		_ *slog.Logger,
-	) error {
-		screen, err := deps.newTerminal(service, queueRunner, initialDirectory)
-		if err != nil {
-			return err
-		}
-		finished := make(chan struct{})
-		defer close(finished)
-		go func() {
-			select {
-			case <-ctx.Done():
-				screen.Shutdown()
-			case <-finished:
-			}
-		}()
-		if err := screen.Run(); err != nil {
-			return fmt.Errorf("run TUI: %w", err)
-		}
-		return nil
-	})
-}
-
 func runWeb(ctx context.Context, deps dependencies, opts runOptions, socket string) error {
-	return runWithFrontend(ctx, deps, opts, func(
+	return runBackend(ctx, deps, opts, func(
 		ctx context.Context,
 		service *app.Service,
 		queueRunner *runner.Runner,
@@ -167,7 +125,7 @@ func runWeb(ctx context.Context, deps dependencies, opts runOptions, socket stri
 	})
 }
 
-func runWithFrontend(
+func runBackend(
 	ctx context.Context,
 	deps dependencies,
 	opts runOptions,
@@ -285,6 +243,8 @@ func runWithFrontend(
 		Presets:         catalog,
 		OutputDirectory: settings.OutputDirectory,
 		ChapterInterval: chapterInterval,
+		InputDirectory:  settings.InputDirectory,
+		SettingsStore:   settingsStore,
 	}
 	appLogger.Info("input browser initialized",
 		"directory", initialDirectory,

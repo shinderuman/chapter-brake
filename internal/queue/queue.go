@@ -225,3 +225,34 @@ func (q Queue) MoveJob(id string, delta int) (Queue, error) {
 	}
 	return next, nil
 }
+
+// MoveJobTo moves a job to a zero-based destination in the queue.
+func (q Queue) MoveJobTo(id string, destination int) (Queue, error) {
+	if destination < 0 || destination >= len(q.Jobs) {
+		return Queue{}, fmt.Errorf("queue destination %d is out of range", destination)
+	}
+	index := -1
+	for i, job := range q.Jobs {
+		if job.ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Queue{}, fmt.Errorf("queue job %q does not exist", id)
+	}
+	if index == destination {
+		return q, nil
+	}
+	jobs := append([]Job(nil), q.Jobs...)
+	job := jobs[index]
+	jobs = append(jobs[:index], jobs[index+1:]...)
+	jobs = append(jobs, Job{})
+	copy(jobs[destination+1:], jobs[destination:])
+	jobs[destination] = job
+	next := Queue{Version: q.Version, Jobs: jobs}
+	if err := next.Validate(); err != nil {
+		return Queue{}, err
+	}
+	return next, nil
+}

@@ -9,6 +9,7 @@ import (
 
 type moveRequest struct {
 	Direction string `json:"direction"`
+	Position  *int   `json:"position"`
 }
 
 type pauseAfterRequest struct {
@@ -76,6 +77,19 @@ func (server *Server) moveQueueJob(writer http.ResponseWriter, request *http.Req
 	var body moveRequest
 	if err := decodeJSON(writer, request, &body); err != nil {
 		server.writeError(writer, http.StatusBadRequest, "invalid_json", "queue-move", err)
+		return
+	}
+	if body.Position != nil {
+		if body.Direction != "" {
+			server.writeError(writer, http.StatusUnprocessableEntity, "invalid_move", "queue-move", errors.New("specify either direction or position"))
+			return
+		}
+		if err := server.config.Application.MoveQueuedJobTo(id, *body.Position); err != nil {
+			server.writeError(writer, http.StatusConflict, "queue_move_failed", "queue-move", err)
+			return
+		}
+		server.config.Controller.QueueChanged()
+		server.getQueue(writer, request)
 		return
 	}
 	delta := 0

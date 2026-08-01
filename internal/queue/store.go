@@ -135,6 +135,37 @@ func (s *Store) MoveJob(id string, delta int) error {
 	return s.save(next)
 }
 
+func (s *Store) MoveJobTo(id string, destination int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	q, err := s.load()
+	if err != nil {
+		return err
+	}
+	index := -1
+	for i, job := range q.Jobs {
+		if job.ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return fmt.Errorf("queue job %q does not exist", id)
+	}
+	if s.activeID == id {
+		return fmt.Errorf("queue job %q is currently running", id)
+	}
+	if s.activeID != "" && destination == 0 {
+		return fmt.Errorf("cannot move a queued job ahead of the running job")
+	}
+	next, err := q.MoveJobTo(id, destination)
+	if err != nil {
+		return err
+	}
+	return s.save(next)
+}
+
 func (s *Store) ClaimHead() (Job, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

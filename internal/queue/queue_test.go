@@ -171,6 +171,30 @@ func TestQueueMoveJob(t *testing.T) {
 	}
 }
 
+func TestQueueMoveJobTo(t *testing.T) {
+	first := validJob()
+	second := validJob()
+	second.ID = "second"
+	second.Output = "/Volumes/Output/source_02.mkv"
+	third := validJob()
+	third.ID = "third"
+	third.Output = "/Volumes/Output/source_03.mkv"
+	q := Queue{Version: Version, Jobs: []Job{first, second, third}}
+
+	moved, err := q.MoveJobTo(third.ID, 0)
+	if err != nil {
+		t.Fatalf("MoveJobTo() error = %v", err)
+	}
+	got := []string{moved.Jobs[0].ID, moved.Jobs[1].ID, moved.Jobs[2].ID}
+	want := []string{third.ID, first.ID, second.ID}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("MoveJobTo() order = %v, want %v", got, want)
+	}
+	if _, err := q.MoveJobTo(second.ID, 3); err == nil {
+		t.Fatal("MoveJobTo(out of range) error = nil")
+	}
+}
+
 func TestStoreLoadOrCreateAndInvalidFiles(t *testing.T) {
 	t.Run("create and round trip", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "data", "queue.json")
@@ -295,11 +319,17 @@ func TestStoreLoadOrCreateAndInvalidFiles(t *testing.T) {
 		if err := store.MoveJob(first.ID, 1); err == nil {
 			t.Fatal("MoveJob(active) error = nil")
 		}
+		if err := store.MoveJobTo(second.ID, 1); err != nil {
+			t.Fatalf("MoveJobTo(waiting) error = %v", err)
+		}
+		if err := store.MoveJobTo(second.ID, 0); err == nil {
+			t.Fatal("MoveJobTo(ahead of active) error = nil")
+		}
 		got, err := store.Load()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Jobs[0].ID != first.ID || got.Jobs[1].ID != third.ID {
+		if got.Jobs[0].ID != first.ID || got.Jobs[1].ID != second.ID || got.Jobs[2].ID != third.ID {
 			t.Fatalf("queue order = %#v", got.Jobs)
 		}
 	})

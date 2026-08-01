@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"chapterbrake/internal/app"
+	"chapterbrake/internal/config"
 	"chapterbrake/internal/control"
 	"chapterbrake/internal/handbrake"
 	"chapterbrake/internal/media"
@@ -264,6 +265,14 @@ func TestDraftWorkflowAndQueueOperations(t *testing.T) {
 	if q.Jobs[0].ID != secondID {
 		t.Fatalf("queue order = %v", []string{q.Jobs[0].ID, q.Jobs[1].ID})
 	}
+	position := 1
+	response = requestJSON(t, httpServer.URL, http.MethodPost, "/api/queue/"+secondID+"/move", moveRequest{Position: &position})
+	assertStatus(t, response, http.StatusOK)
+	_ = response.Body.Close()
+	q, _ = service.Queue()
+	if q.Jobs[1].ID != secondID {
+		t.Fatalf("queue position move order = %v", []string{q.Jobs[0].ID, q.Jobs[1].ID})
+	}
 	response = requestJSON(t, httpServer.URL, http.MethodGet, "/api/queue/"+firstID, nil)
 	assertStatus(t, response, http.StatusOK)
 	_ = response.Body.Close()
@@ -508,7 +517,8 @@ func testHandler(t *testing.T) (http.Handler, *app.Service, *testController, str
 		Presets: presetCatalog, OutputDirectory: t.TempDir(),
 		ChapterInterval: 10 * time.Minute, Now: func() time.Time {
 			return time.Date(2026, 7, 29, 12, 0, 0, 0, time.Local)
-		},
+		}, InputDirectory: inputDirectory,
+		SettingsStore: config.Store{Path: filepath.Join(t.TempDir(), "settings.json")},
 	}
 	controller := newTestController()
 	server, err := New(Config{
@@ -520,6 +530,37 @@ func testHandler(t *testing.T) (http.Handler, *app.Service, *testController, str
 		t.Fatal(err)
 	}
 	return server.Handler(), service, controller, input
+}
+
+func TestSettingsAPI(t *testing.T) {
+	handler, service, _, _ := testHandler(t)
+	httpServer := httptest.NewServer(handler)
+	defer httpServer.Close()
+
+	response := requestJSON(t, httpServer.URL, http.MethodGet, "/api/settings", nil)
+	assertStatus(t, response, http.StatusOK)
+	var initial config.Settings
+	if err := json.NewDecoder(response.Body).Decode(&initial); err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	output := filepath.Join(t.TempDir(), "future-output")
+	updated := map[string]any{
+		"input_directory":  initial.InputDirectory,
+		"output_directory": output,
+		"chapter_interval": "25:00",
+	}
+	response = requestJSON(t, httpServer.URL, http.MethodPut, "/api/settings", updated)
+	assertStatus(t, response, http.StatusOK)
+	_ = response.Body.Close()
+	if got := service.CurrentSettings(); got.OutputDirectory != output || got.ChapterInterval != "25:00" {
+		t.Fatalf("settings after update = %#v", got)
+	}
+
+	updated["input_directory"] = filepath.Join(t.TempDir(), "missing")
+	response = requestJSON(t, httpServer.URL, http.MethodPut, "/api/settings", updated)
+	assertStatus(t, response, http.StatusUnprocessableEntity)
+	_ = response.Body.Close()
 }
 
 func requestJSON(t *testing.T, baseURL, method, path string, body any) *http.Response {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"chapterbrake/internal/app"
+	"chapterbrake/internal/config"
 	"chapterbrake/internal/control"
 	"chapterbrake/internal/handbrake"
 	"chapterbrake/internal/queue"
@@ -33,6 +34,9 @@ type Application interface {
 	Queue() (queue.Queue, error)
 	DeleteQueuedJob(string) error
 	MoveQueuedJob(string, int) error
+	MoveQueuedJobTo(string, int) error
+	CurrentSettings() config.Settings
+	UpdateSettings(config.Settings) error
 }
 
 type PresetCatalog interface {
@@ -153,6 +157,8 @@ func (server *Server) Serve(ctx context.Context) error {
 func (server *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", server.status)
+	mux.HandleFunc("GET /api/settings", server.getSettings)
+	mux.HandleFunc("PUT /api/settings", server.putSettings)
 	mux.HandleFunc("GET /api/files", server.files)
 	mux.HandleFunc("GET /api/presets", server.presets)
 	mux.HandleFunc("POST /api/drafts", server.createDraft)
@@ -187,7 +193,7 @@ func (server *Server) status(writer http.ResponseWriter, _ *http.Request) {
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"ready":             true,
-		"initial_directory": server.config.InitialDirectory,
+		"initial_directory": server.initialDirectory(),
 		"queue":             snapshot,
 	})
 }
@@ -195,7 +201,7 @@ func (server *Server) status(writer http.ResponseWriter, _ *http.Request) {
 func (server *Server) files(writer http.ResponseWriter, request *http.Request) {
 	directory := request.URL.Query().Get("directory")
 	if directory == "" {
-		directory = server.config.InitialDirectory
+		directory = server.initialDirectory()
 	}
 	entries, err := app.ListInputEntries(directory)
 	if err != nil {
@@ -206,6 +212,12 @@ func (server *Server) files(writer http.ResponseWriter, request *http.Request) {
 		"directory": directory,
 		"entries":   entries,
 	})
+}
+
+func (server *Server) initialDirectory() string {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	return server.config.InitialDirectory
 }
 
 func (server *Server) writeError(writer http.ResponseWriter, status int, code, stage string, err error) {

@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"chapterbrake/internal/config"
 	"chapterbrake/internal/handbrake"
 	"chapterbrake/internal/media"
 	"chapterbrake/internal/naming"
@@ -23,6 +25,7 @@ type QueueStore interface {
 	AppendJobs(...queue.Job) error
 	DeleteJob(string) error
 	MoveJob(string, int) error
+	MoveJobTo(string, int) error
 }
 
 type Scanner interface {
@@ -41,9 +44,12 @@ type Service struct {
 	Presets         PresetCatalog
 	OutputDirectory string
 	ChapterInterval time.Duration
+	InputDirectory  string
+	SettingsStore   config.Store
 	Now             func() time.Time
 
-	sequence atomic.Uint64
+	settingsMu sync.RWMutex
+	sequence   atomic.Uint64
 }
 
 type Draft struct {
@@ -53,6 +59,7 @@ type Draft struct {
 	Base             string
 	StartIndex       int
 	ChapterInterval  time.Duration
+	OutputDirectory  string
 	SelectedChapters []int
 	AudioTracks      []int
 	Subtitles        []int
@@ -89,10 +96,11 @@ func (s *Service) Analyze(ctx context.Context, input string) (Draft, error) {
 	if err != nil {
 		return Draft{}, err
 	}
-	if s.ChapterInterval <= 0 {
+	outputDirectory, chapterInterval := s.outputSettings()
+	if chapterInterval <= 0 {
 		return Draft{}, fmt.Errorf("chapter interval must be positive")
 	}
-	approximation, err := media.ApproximateStarts(mediaInfo.Chapters, mediaInfo.Duration, s.ChapterInterval)
+	approximation, err := media.ApproximateStarts(mediaInfo.Chapters, mediaInfo.Duration, chapterInterval)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -122,7 +130,8 @@ func (s *Service) Analyze(ctx context.Context, input string) (Draft, error) {
 		Input:            input,
 		Media:            mediaInfo,
 		Base:             base,
-		ChapterInterval:  s.ChapterInterval,
+		ChapterInterval:  chapterInterval,
+		OutputDirectory:  outputDirectory,
 		SelectedChapters: selected,
 		AudioTracks:      audio,
 		Subtitles:        []int{},
@@ -146,7 +155,10 @@ func (s *Service) InitializeNaming(draft *Draft) error {
 	if err != nil {
 		return err
 	}
-	outputDirectory := filepath.Join(s.OutputDirectory, draft.Base)
+	if !filepath.IsAbs(draft.OutputDirectory) {
+		return fmt.Errorf("draft output directory must be absolute")
+	}
+	outputDirectory := filepath.Join(draft.OutputDirectory, draft.Base)
 	var entries []string
 	directoryEntries, err := os.ReadDir(outputDirectory)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -193,8 +205,11 @@ func (s *Service) BuildPreview(draft Draft) (Preview, error) {
 	if err := validateSubtitles(draft.Subtitles, draft.Media.SubtitleTracks); err != nil {
 		return Preview{}, err
 	}
+	if !filepath.IsAbs(draft.OutputDirectory) {
+		return Preview{}, fmt.Errorf("draft output directory must be absolute")
+	}
 	outputs, err := naming.OutputPaths(
-		filepath.Join(s.OutputDirectory, draft.Base),
+		filepath.Join(draft.OutputDirectory, draft.Base),
 		draft.Base,
 		draft.StartIndex,
 		len(ranges),
@@ -287,6 +302,52 @@ func (s *Service) MoveQueuedJob(id string, delta int) error {
 		return fmt.Errorf("queue store is nil")
 	}
 	return s.QueueStore.MoveJob(id, delta)
+}
+
+func (s *Service) MoveQueuedJobTo(id string, destination int) error {
+	if s.QueueStore == nil {
+		return fmt.Errorf("queue store is nil")
+	}
+	return s.QueueStore.MoveJobTo(id, destination)
+}
+
+func (s *Service) CurrentSettings() config.Settings {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return config.Settings{
+		Version:         config.Version,
+		InputDirectory:  s.InputDirectory,
+		OutputDirectory: s.OutputDirectory,
+		ChapterInterval: media.FormatChapterInterval(s.ChapterInterval),
+	}
+}
+
+func (s *Service) UpdateSettings(settings config.Settings) error {
+	if err := settings.ValidateDirectories(); err != nil {
+		return err
+	}
+	interval, err := media.ParseChapterInterval(settings.ChapterInterval)
+	if err != nil {
+		return err
+	}
+	if s.SettingsStore.Path == "" {
+		return fmt.Errorf("settings store is not configured")
+	}
+	if err := s.SettingsStore.Save(settings); err != nil {
+		return err
+	}
+	s.settingsMu.Lock()
+	s.InputDirectory = settings.InputDirectory
+	s.OutputDirectory = settings.OutputDirectory
+	s.ChapterInterval = interval
+	s.settingsMu.Unlock()
+	return nil
+}
+
+func (s *Service) outputSettings() (string, time.Duration) {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.OutputDirectory, s.ChapterInterval
 }
 
 func validateSubtitles(selected []int, available []media.SubtitleTrack) error {
