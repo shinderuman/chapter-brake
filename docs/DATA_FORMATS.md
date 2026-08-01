@@ -75,7 +75,11 @@
       "chapter_start": 1,
       "chapter_end": 5,
       "duration_seconds": 1421,
-      "audio_tracks": [1, 2],
+      "audio_selections": [
+        {"track": 1, "quality": "high"},
+        {"track": 2, "quality": "standard"},
+        {"track": 3, "quality": "standard"}
+      ],
       "subtitles": [1]
     }
   ]
@@ -94,9 +98,9 @@
 - `input`と`output`は絶対パス。
 - `container`は`mp4`または`mkv`。
 - `chapter_start`と`chapter_end`は1以上で、開始<=終了。
-- `audio_tracks`は選択された入力音声トラック番号。1または2だけを重複なしで
-  1件以上許可する。
-- 各入力トラックから作る高品質・標準品質の具体設定はChapterBrakeの
+- `audio_selections`は入力音声トラックごとの出力品質を表す。`track`は1以上で
+  重複不可、`quality`は`high`または`standard`とする。空配列は無音声出力を表す。
+- 高音質・低音質の具体設定はChapterBrakeの
   バージョン付き音声方針から決定し、映像`preset`の音声ルールには依存しない。
 - `subtitles`は入力字幕トラック番号。MP4では空配列でなければならない。
 - `preset_file`はGUIエクスポートプリセットを使うジョブの絶対パス。互換内蔵または

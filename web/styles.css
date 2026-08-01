@@ -32,11 +32,12 @@ body {
     var(--bg);
 }
 
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { color: inherit; }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
@@ -357,6 +358,8 @@ button.list-card:hover { border-color: var(--line-strong); background: var(--pan
 .check-row input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--accent); }
 .check-row strong { display: block; }
 .check-row small { display: block; margin-top: 4px; color: var(--muted); line-height: 1.5; }
+.audio-quality-row { align-items: center; justify-content: space-between; }
+.audio-quality-row select { min-width: 120px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel-soft); color: var(--text); }
 
 .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 14px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }

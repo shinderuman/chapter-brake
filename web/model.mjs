@@ -25,6 +25,14 @@ export function progressPercent(value) {
   return Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100);
 }
 
+export function audioSummary(job) {
+  const selections = normalizeArray(job?.audio_selections);
+  if (selections.length === 0) return "なし";
+  return selections.map(selection =>
+    `Track ${selection.track}: ${selection.quality === "high" ? "高音質" : "低音質"}`,
+  ).join(", ");
+}
+
 export function chapterOutputDurations(chapters, totalSeconds, selectedChapters, excludeFinal) {
   const items = normalizeArray(chapters);
   if (items.length === 0) return new Map();

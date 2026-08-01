@@ -13,16 +13,16 @@ import (
 
 func logJob() queue.Job {
 	return queue.Job{
-		ID:           "job-1",
-		CreatedAt:    time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
-		Input:        "/input/source.mkv",
-		Output:       "/output/日本語 Title #01.mkv",
-		Preset:       "1080p MKV",
-		Container:    queue.ContainerMKV,
-		ChapterStart: 1,
-		ChapterEnd:   2,
-		AudioTracks:  []int{1},
-		Subtitles:    []int{},
+		ID:              "job-1",
+		CreatedAt:       time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
+		Input:           "/input/source.mkv",
+		Output:          "/output/日本語 Title #01.mkv",
+		Preset:          "1080p MKV",
+		Container:       queue.ContainerMKV,
+		ChapterStart:    1,
+		ChapterEnd:      2,
+		AudioSelections: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}},
+		Subtitles:       []int{},
 	}
 }
 
@@ -81,6 +81,9 @@ func TestJobAndCommandLogs(t *testing.T) {
 		if !strings.Contains(string(summary), expected) {
 			t.Fatalf("summary lacks %q: %s", expected, summary)
 		}
+	}
+	if !strings.Contains(string(summary), `audio_selections="[{1 high}]"`) {
+		t.Fatalf("summary lacks effective audio selections: %s", summary)
 	}
 	matches, err := filepath.Glob(filepath.Join(directory, "*-handbrake.*.log"))
 	if err != nil {

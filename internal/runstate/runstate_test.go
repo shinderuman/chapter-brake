@@ -12,16 +12,16 @@ import (
 
 func stateJob() queue.Job {
 	return queue.Job{
-		ID:           "job-1",
-		CreatedAt:    time.Now(),
-		Input:        "/input/source.mkv",
-		Output:       "/output/source_01.mkv",
-		Preset:       "MKV Presets",
-		Container:    queue.ContainerMKV,
-		ChapterStart: 1,
-		ChapterEnd:   2,
-		AudioTracks:  []int{1},
-		Subtitles:    []int{},
+		ID:              "job-1",
+		CreatedAt:       time.Now(),
+		Input:           "/input/source.mkv",
+		Output:          "/output/source_01.mkv",
+		Preset:          "MKV Presets",
+		Container:       queue.ContainerMKV,
+		ChapterStart:    1,
+		ChapterEnd:      2,
+		AudioSelections: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}},
+		Subtitles:       []int{},
 	}
 }
 

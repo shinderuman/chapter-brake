@@ -41,28 +41,32 @@ type tracksRequest struct {
 	Tracks []int `json:"tracks"`
 }
 
+type audioRequest struct {
+	Selections []queue.AudioSelection `json:"selections"`
+}
+
 type addQueueRequest struct {
 	OverwriteApproved bool `json:"overwrite_approved"`
 }
 
 type draftView struct {
-	ID                string              `json:"id"`
-	Input             string              `json:"input"`
-	DurationSeconds   int64               `json:"duration_seconds"`
-	Chapters          []chapterView       `json:"chapters"`
-	AudioTracks       []audioTrackView    `json:"audio_tracks"`
-	SubtitleTracks    []subtitleTrackView `json:"subtitle_tracks"`
-	Preset            *presetView         `json:"preset,omitempty"`
-	Base              string              `json:"base"`
-	StartIndex        int                 `json:"start_index"`
-	ChapterInterval   string              `json:"chapter_interval"`
-	SelectedChapters  []int               `json:"selected_chapters"`
-	SelectedAudio     []int               `json:"selected_audio"`
-	SelectedSubtitles []int               `json:"selected_subtitles"`
-	AutoChapters      bool                `json:"auto_chapters"`
-	TailMerged        bool                `json:"tail_merged"`
-	ExcludeFinal      bool                `json:"exclude_final"`
-	Preview           *previewView        `json:"preview,omitempty"`
+	ID                string                 `json:"id"`
+	Input             string                 `json:"input"`
+	DurationSeconds   int64                  `json:"duration_seconds"`
+	Chapters          []chapterView          `json:"chapters"`
+	AudioTracks       []audioTrackView       `json:"audio_tracks"`
+	SubtitleTracks    []subtitleTrackView    `json:"subtitle_tracks"`
+	Preset            *presetView            `json:"preset,omitempty"`
+	Base              string                 `json:"base"`
+	StartIndex        int                    `json:"start_index"`
+	ChapterInterval   string                 `json:"chapter_interval"`
+	SelectedChapters  []int                  `json:"selected_chapters"`
+	AudioSelections   []queue.AudioSelection `json:"audio_selections"`
+	SelectedSubtitles []int                  `json:"selected_subtitles"`
+	AutoChapters      bool                   `json:"auto_chapters"`
+	TailMerged        bool                   `json:"tail_merged"`
+	ExcludeFinal      bool                   `json:"exclude_final"`
+	Preview           *previewView           `json:"preview,omitempty"`
 }
 
 type chapterView struct {
@@ -376,27 +380,36 @@ func (server *Server) setDraftChapters(writer http.ResponseWriter, request *http
 }
 
 func (server *Server) setDraftAudio(writer http.ResponseWriter, request *http.Request) {
-	server.setTracks(writer, request, true)
+	var body audioRequest
+	if err := decodeJSON(writer, request, &body); err != nil {
+		server.writeError(writer, http.StatusBadRequest, "invalid_json", "audio", err)
+		return
+	}
+	if body.Selections == nil {
+		server.writeError(writer, http.StatusUnprocessableEntity, "invalid_tracks", "audio", errors.New("selections must be a JSON array"))
+		return
+	}
+	server.updateDraftTracks(writer, request, "audio", func(candidate *app.Draft) {
+		candidate.AudioSelections = append([]queue.AudioSelection{}, body.Selections...)
+	})
 }
 
 func (server *Server) setDraftSubtitles(writer http.ResponseWriter, request *http.Request) {
-	server.setTracks(writer, request, false)
-}
-
-func (server *Server) setTracks(writer http.ResponseWriter, request *http.Request, audio bool) {
 	var body tracksRequest
-	stage := "subtitles"
-	if audio {
-		stage = "audio"
-	}
 	if err := decodeJSON(writer, request, &body); err != nil {
-		server.writeError(writer, http.StatusBadRequest, "invalid_json", stage, err)
+		server.writeError(writer, http.StatusBadRequest, "invalid_json", "subtitles", err)
 		return
 	}
 	if body.Tracks == nil {
-		server.writeError(writer, http.StatusUnprocessableEntity, "invalid_tracks", stage, errors.New("tracks must be a JSON array"))
+		server.writeError(writer, http.StatusUnprocessableEntity, "invalid_tracks", "subtitles", errors.New("tracks must be a JSON array"))
 		return
 	}
+	server.updateDraftTracks(writer, request, "subtitles", func(candidate *app.Draft) {
+		candidate.Subtitles = append([]int{}, body.Tracks...)
+	})
+}
+
+func (server *Server) updateDraftTracks(writer http.ResponseWriter, request *http.Request, stage string, update func(*app.Draft)) {
 	id, state, ok := server.loadDraft(request)
 	if !ok {
 		server.writeError(writer, http.StatusNotFound, "draft_not_found", stage, errors.New("draft does not exist"))
@@ -404,11 +417,7 @@ func (server *Server) setTracks(writer http.ResponseWriter, request *http.Reques
 	}
 	server.mu.Lock()
 	candidate := state.Draft
-	if audio {
-		candidate.AudioTracks = append([]int{}, body.Tracks...)
-	} else {
-		candidate.Subtitles = append([]int{}, body.Tracks...)
-	}
+	update(&candidate)
 	server.mu.Unlock()
 	if _, err := server.config.Application.BuildPreview(candidate); err != nil {
 		server.writeError(writer, http.StatusUnprocessableEntity, "invalid_tracks", stage, err)
@@ -571,7 +580,7 @@ func makeDraftView(id string, state *draftState) (draftView, error) {
 		Base: draft.Base, StartIndex: draft.StartIndex,
 		ChapterInterval:   media.FormatChapterInterval(draft.ChapterInterval),
 		SelectedChapters:  append([]int{}, draft.SelectedChapters...),
-		SelectedAudio:     append([]int{}, draft.AudioTracks...),
+		AudioSelections:   append([]queue.AudioSelection{}, draft.AudioSelections...),
 		SelectedSubtitles: append([]int{}, draft.Subtitles...),
 		AutoChapters:      draft.AutoChapters, TailMerged: draft.TailMerged, ExcludeFinal: draft.ExcludeFinal,
 	}

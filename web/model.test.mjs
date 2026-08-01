@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   apiErrorMessage,
+  audioSummary,
   canDeleteJob,
   chapterOutputDurations,
   fileSize,
@@ -50,6 +51,11 @@ test("chapter output durations follow the current checkbox selection", () => {
   ];
   assert.deepEqual([...chapterOutputDurations(chapters, 600, [1, 3], false)], [[1, 300], [3, 300]]);
   assert.deepEqual([...chapterOutputDurations(chapters, 600, [1, 2, 4], true)], [[1, 120], [2, 420]]);
+});
+
+test("audio summary supports selected and no-audio jobs", () => {
+  assert.equal(audioSummary({ audio_selections: [{ track: 1, quality: "high" }, { track: 3, quality: "standard" }] }), "Track 1: 高音質, Track 3: 低音質");
+  assert.equal(audioSummary({ audio_selections: [] }), "なし");
 });
 
 test("runtime labels distinguish pause and failure", () => {

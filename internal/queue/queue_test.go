@@ -19,8 +19,11 @@ func validJob() Job {
 		Container:    ContainerMKV,
 		ChapterStart: 1,
 		ChapterEnd:   4,
-		AudioTracks:  []int{1, 2},
-		Subtitles:    []int{1},
+		AudioSelections: []AudioSelection{
+			{Track: 1, Quality: AudioHigh},
+			{Track: 2, Quality: AudioStandard},
+		},
+		Subtitles: []int{1},
 	}
 }
 
@@ -36,6 +39,12 @@ func TestJobValidate(t *testing.T) {
 			j.Output = "/Volumes/Output/source_01.mp4"
 			j.Subtitles = []int{}
 		}, ""},
+		{"valid track three audio selection", func(j *Job) {
+			j.AudioSelections = []AudioSelection{{Track: 1, Quality: AudioHigh}, {Track: 3, Quality: AudioStandard}}
+		}, ""},
+		{"valid audio-less job", func(j *Job) {
+			j.AudioSelections = []AudioSelection{}
+		}, ""},
 		{"invalid id", func(j *Job) { j.ID = "../bad" }, "invalid id"},
 		{"zero created", func(j *Job) { j.CreatedAt = time.Time{} }, "created_at"},
 		{"relative input", func(j *Job) { j.Input = "source.mkv" }, "input must be absolute"},
@@ -49,10 +58,16 @@ func TestJobValidate(t *testing.T) {
 		{"chapter below one", func(j *Job) { j.ChapterStart = 0 }, "chapter range"},
 		{"chapter reversed", func(j *Job) { j.ChapterStart, j.ChapterEnd = 4, 3 }, "chapter range"},
 		{"negative duration", func(j *Job) { j.DurationSeconds = -1 }, "duration_seconds"},
-		{"nil audio", func(j *Job) { j.AudioTracks = nil }, "JSON array"},
-		{"empty audio", func(j *Job) { j.AudioTracks = []int{} }, "at least one"},
-		{"audio above two", func(j *Job) { j.AudioTracks = []int{3} }, "unsupported"},
-		{"duplicate audio", func(j *Job) { j.AudioTracks = []int{1, 1} }, "duplicate"},
+		{"nil audio", func(j *Job) { j.AudioSelections = nil }, "JSON array"},
+		{"invalid audio selection track", func(j *Job) {
+			j.AudioSelections = []AudioSelection{{Track: 0, Quality: AudioHigh}}
+		}, "invalid track"},
+		{"invalid audio selection quality", func(j *Job) {
+			j.AudioSelections = []AudioSelection{{Track: 1, Quality: "lossless"}}
+		}, "invalid quality"},
+		{"duplicate audio selection", func(j *Job) {
+			j.AudioSelections = []AudioSelection{{Track: 3, Quality: AudioHigh}, {Track: 3, Quality: AudioStandard}}
+		}, "duplicate"},
 		{"nil subtitles", func(j *Job) { j.Subtitles = nil }, "JSON array"},
 		{"bad subtitle", func(j *Job) { j.Subtitles = []int{0} }, "invalid"},
 		{"duplicate subtitle", func(j *Job) { j.Subtitles = []int{1, 1} }, "duplicate"},

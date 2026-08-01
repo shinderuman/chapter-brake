@@ -16,30 +16,22 @@ const (
 	standardBitrate     = 160
 )
 
-type AudioQuality string
-
-const (
-	AudioHigh     AudioQuality = "high"
-	AudioStandard AudioQuality = "standard"
-)
-
 type AudioOutput struct {
 	InputTrack int
-	Quality    AudioQuality
+	Quality    queue.AudioQuality
 	Encoder    string
 	Bitrate    int
 	Mixdown    string
 	SampleRate string
 }
 
-// AudioPlan creates two outputs per selected input in input-track order:
-// high quality first, then standard quality.
-func AudioPlan(selected []int, available []media.AudioTrack, container queue.Container) ([]AudioOutput, error) {
+// AudioPlan creates one output for each selected input/quality pair.
+func AudioPlan(selected []queue.AudioSelection, available []media.AudioTrack, container queue.Container) ([]AudioOutput, error) {
 	if container != queue.ContainerMKV && container != queue.ContainerMP4 {
 		return nil, fmt.Errorf("unsupported container %q", container)
 	}
 	if len(selected) == 0 {
-		return nil, fmt.Errorf("at least one audio track must be selected")
+		return []AudioOutput{}, nil
 	}
 
 	tracks := make(map[int]media.AudioTrack, len(available))
@@ -53,49 +45,53 @@ func AudioPlan(selected []int, available []media.AudioTrack, container queue.Con
 		tracks[track.Number] = track
 	}
 
-	ordered := append([]int(nil), selected...)
-	sort.Ints(ordered)
-	outputs := make([]AudioOutput, 0, len(ordered)*2)
-	previous := 0
-	for _, number := range ordered {
-		if number < 1 || number > 2 {
-			return nil, fmt.Errorf("audio track %d is not supported in the initial version", number)
+	ordered := append([]queue.AudioSelection(nil), selected...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Track < ordered[j].Track })
+	outputs := make([]AudioOutput, 0, len(ordered))
+	seen := make(map[int]struct{}, len(ordered))
+	for _, selection := range ordered {
+		if _, exists := seen[selection.Track]; exists {
+			return nil, fmt.Errorf("audio track %d is selected more than once", selection.Track)
 		}
-		if number == previous {
-			return nil, fmt.Errorf("audio track %d is selected more than once", number)
-		}
-		previous = number
+		seen[selection.Track] = struct{}{}
 
-		track, ok := tracks[number]
+		track, ok := tracks[selection.Track]
 		if !ok {
-			return nil, fmt.Errorf("selected audio track %d does not exist", number)
+			return nil, fmt.Errorf("selected audio track %d does not exist", selection.Track)
 		}
-		high := AudioOutput{
-			InputTrack: number,
-			Quality:    AudioHigh,
-			Encoder:    highFallbackEncoder,
-			Bitrate:    highBitrate,
-			Mixdown:    highMixdown(track.Channels),
-			SampleRate: "auto",
+		switch selection.Quality {
+		case queue.AudioHigh:
+			output := AudioOutput{
+				InputTrack: selection.Track,
+				Quality:    queue.AudioHigh,
+				Encoder:    highFallbackEncoder,
+				Bitrate:    highBitrate,
+				Mixdown:    highMixdown(track.Channels),
+				SampleRate: "auto",
+			}
+			if encoder, ok := passthroughEncoder(track.Codec, container); ok {
+				output.Encoder = encoder
+			}
+			outputs = append(outputs, output)
+		case queue.AudioStandard:
+			outputs = append(outputs, AudioOutput{
+				InputTrack: selection.Track,
+				Quality:    queue.AudioStandard,
+				Encoder:    standardEncoder,
+				Bitrate:    standardBitrate,
+				Mixdown:    "stereo",
+				SampleRate: "auto",
+			})
+		default:
+			return nil, fmt.Errorf("audio track %d has unsupported quality %q", selection.Track, selection.Quality)
 		}
-		if encoder, ok := passthroughEncoder(track.Codec, container); ok {
-			high.Encoder = encoder
-		}
-		outputs = append(outputs, high, AudioOutput{
-			InputTrack: number,
-			Quality:    AudioStandard,
-			Encoder:    standardEncoder,
-			Bitrate:    standardBitrate,
-			Mixdown:    "stereo",
-			SampleRate: "auto",
-		})
 	}
 	return outputs, nil
 }
 
 func passthroughEncoder(codec string, container queue.Container) (string, bool) {
 	normalized := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(codec))
-	// AC-3 passthrough in MP4 and MKV is the path proven by the PoC. Other
+	// AC-3 passthrough in MP4 and MKV is the locally verified path. Other
 	// codecs deliberately use the safe high-quality AAC fallback until their
 	// container combinations are verified with real encodes.
 	if normalized == "ac3" {

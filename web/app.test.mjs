@@ -32,6 +32,14 @@ test("chapter checkbox changes refresh output totals immediately", () => {
   assert.match(appSource, /input\[name="exclude_final"\][\s\S]*?refreshChapterOutputDurations/);
 });
 
+test("every audio track offers high, standard, and unselected states", () => {
+  assert.match(appSource, /select name="track" data-track="\$\{track\.number\}"/);
+  assert.match(appSource, />高音質<\/option>/);
+  assert.match(appSource, />低音質<\/option>/);
+  assert.match(appSource, />未選択<\/option>/);
+  assert.match(appSource, /body: \{ selections \}/);
+});
+
 test("continuous queue and log updates preserve interactive dialog nodes", () => {
   assert.match(appSource, /renderKey === queueRenderKey/);
   assert.match(appSource, /renderKey === jobDialogRenderKey/);

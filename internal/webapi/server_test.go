@@ -184,7 +184,8 @@ func TestDraftWorkflowAndQueueOperations(t *testing.T) {
 	assertStatus(t, response, http.StatusCreated)
 	var draft draftView
 	decodeResponse(t, response, &draft)
-	if draft.ID == "" || len(draft.Chapters) != 4 || len(draft.AudioTracks) != 2 {
+	if draft.ID == "" || len(draft.Chapters) != 4 || len(draft.AudioTracks) != 3 || len(draft.AudioSelections) != 3 ||
+		draft.AudioSelections[0].Quality != queue.AudioHigh || draft.AudioSelections[1].Quality != queue.AudioStandard {
 		t.Fatalf("draft = %#v", draft)
 	}
 	draftPath := "/api/drafts/" + draft.ID
@@ -216,20 +217,26 @@ func TestDraftWorkflowAndQueueOperations(t *testing.T) {
 		t.Fatalf("selected chapters = %v", draft.SelectedChapters)
 	}
 
-	response = requestJSON(t, httpServer.URL, http.MethodPut, draftPath+"/audio", tracksRequest{Tracks: []int{1}})
+	response = requestJSON(t, httpServer.URL, http.MethodPut, draftPath+"/audio", audioRequest{Selections: []queue.AudioSelection{{Track: 3, Quality: queue.AudioStandard}}})
 	assertStatus(t, response, http.StatusOK)
 	_ = response.Body.Close()
 	response = requestJSON(t, httpServer.URL, http.MethodPut, draftPath+"/subtitles", tracksRequest{Tracks: []int{1}})
 	assertStatus(t, response, http.StatusOK)
 	_ = response.Body.Close()
 
-	response = requestJSON(t, httpServer.URL, http.MethodPut, draftPath+"/audio", tracksRequest{Tracks: []int{3}})
+	response = requestJSON(t, httpServer.URL, http.MethodPut, draftPath+"/audio", audioRequest{Selections: []queue.AudioSelection{{Track: 4, Quality: queue.AudioHigh}}})
 	assertStatus(t, response, http.StatusUnprocessableEntity)
 	_ = response.Body.Close()
 	response = requestJSON(t, httpServer.URL, http.MethodGet, draftPath, nil)
 	decodeResponse(t, response, &draft)
-	if len(draft.SelectedAudio) != 1 || draft.SelectedAudio[0] != 1 {
-		t.Fatalf("invalid update changed selected audio: %v", draft.SelectedAudio)
+	if len(draft.AudioSelections) != 1 || draft.AudioSelections[0].Track != 3 || draft.AudioSelections[0].Quality != queue.AudioStandard {
+		t.Fatalf("invalid update changed selected audio: %v", draft.AudioSelections)
+	}
+	response = requestJSON(t, httpServer.URL, http.MethodPut, draftPath+"/audio", audioRequest{Selections: []queue.AudioSelection{}})
+	assertStatus(t, response, http.StatusOK)
+	decodeResponse(t, response, &draft)
+	if draft.AudioSelections == nil || len(draft.AudioSelections) != 0 {
+		t.Fatalf("empty audio selections must be a JSON array: %#v", draft.AudioSelections)
 	}
 	response = requestJSON(t, httpServer.URL, http.MethodPut, draftPath+"/subtitles", tracksRequest{Tracks: []int{}})
 	assertStatus(t, response, http.StatusOK)
@@ -514,7 +521,7 @@ func testHandler(t *testing.T) (http.Handler, *app.Service, *testController, str
 				{Number: 3, Start: 20 * time.Minute, Title: "Chapter 3"},
 				{Number: 4, Start: 30 * time.Minute, Title: "Chapter 4"},
 			},
-			AudioTracks:    []media.AudioTrack{{Number: 1, Language: "jpn"}, {Number: 2, Language: "eng"}},
+			AudioTracks:    []media.AudioTrack{{Number: 1, Language: "jpn"}, {Number: 2, Language: "eng"}, {Number: 3, Language: "jpn"}},
 			SubtitleTracks: []media.SubtitleTrack{{Number: 1, Language: "jpn", Format: "PGS"}},
 		}},
 		Presets: presetCatalog, OutputDirectory: t.TempDir(),

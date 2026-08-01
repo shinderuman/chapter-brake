@@ -144,8 +144,13 @@ func TestAnalyzeInitialSelections(t *testing.T) {
 	if !reflect.DeepEqual(draft.SelectedChapters, []int{1, 2}) {
 		t.Fatalf("selected chapters = %v", draft.SelectedChapters)
 	}
-	if !reflect.DeepEqual(draft.AudioTracks, []int{1, 2}) {
-		t.Fatalf("audio tracks = %v", draft.AudioTracks)
+	wantAudio := []queue.AudioSelection{
+		{Track: 1, Quality: queue.AudioHigh},
+		{Track: 2, Quality: queue.AudioStandard},
+		{Track: 3, Quality: queue.AudioStandard},
+	}
+	if !reflect.DeepEqual(draft.AudioSelections, wantAudio) {
+		t.Fatalf("audio selections = %v", draft.AudioSelections)
 	}
 	if draft.Subtitles == nil || len(draft.Subtitles) != 0 {
 		t.Fatalf("subtitles = %#v", draft.Subtitles)
@@ -232,16 +237,16 @@ func TestInitializeNamingUsesQueueAndFiles(t *testing.T) {
 	service, draft, store := testService(t)
 	draft.Preset = handbrake.CuratedPresets()[1]
 	queued := queue.Job{
-		ID:           "queued",
-		CreatedAt:    time.Now(),
-		Input:        draft.Input,
-		Output:       filepath.Join(service.OutputDirectory, "番組", "番組_03.mkv"),
-		Preset:       "1080p MKV",
-		Container:    queue.ContainerMKV,
-		ChapterStart: 1,
-		ChapterEnd:   1,
-		AudioTracks:  []int{1},
-		Subtitles:    []int{},
+		ID:              "queued",
+		CreatedAt:       time.Now(),
+		Input:           draft.Input,
+		Output:          filepath.Join(service.OutputDirectory, "番組", "番組_03.mkv"),
+		Preset:          "1080p MKV",
+		Container:       queue.ContainerMKV,
+		ChapterStart:    1,
+		ChapterEnd:      1,
+		AudioSelections: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}},
+		Subtitles:       []int{},
 	}
 	store.q.Jobs = append(store.q.Jobs, queued)
 	outputDirectory := filepath.Join(service.OutputDirectory, "番組")
@@ -342,9 +347,10 @@ func TestBuildPreviewValidation(t *testing.T) {
 		t.Fatalf("BuildPreview(MP4 subtitles) error = %v", err)
 	}
 	draft.Subtitles = []int{}
-	draft.AudioTracks = nil
-	if _, err := service.BuildPreview(draft); err == nil {
-		t.Fatal("BuildPreview(no audio) error = nil")
+	draft.AudioSelections = []queue.AudioSelection{}
+	preview, err := service.BuildPreview(draft)
+	if err != nil || len(preview.Jobs) == 0 || preview.Jobs[0].AudioSelections == nil || len(preview.Jobs[0].AudioSelections) != 0 {
+		t.Fatalf("BuildPreview(no audio) = %#v, %v", preview, err)
 	}
 }
 

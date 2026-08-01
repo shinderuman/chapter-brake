@@ -64,7 +64,7 @@ func OpenJob(directory string, job queue.Job, now time.Time) (*JobLog, error) {
 		"preset", job.Preset,
 		"container", job.Container,
 		"chapters", fmt.Sprintf("%d-%d", job.ChapterStart, job.ChapterEnd),
-		"audio_tracks", fmt.Sprint(job.AudioTracks),
+		"audio_selections", fmt.Sprint(job.AudioSelections),
 		"subtitles", fmt.Sprint(job.Subtitles),
 	)
 	return log, nil

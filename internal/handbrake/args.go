@@ -51,7 +51,7 @@ func EncodeArgs(job queue.Job, encodeOutput string, preset Preset, availableAudi
 		return nil, fmt.Errorf("HandBrake output must not be the final output path")
 	}
 
-	audio, err := AudioPlan(job.AudioTracks, availableAudio, job.Container)
+	audio, err := AudioPlan(job.AudioSelections, availableAudio, job.Container)
 	if err != nil {
 		return nil, err
 	}
@@ -75,25 +75,29 @@ func EncodeArgs(job queue.Job, encodeOutput string, preset Preset, availableAudi
 	if preset.CropMode != "" {
 		args = append(args, "--crop-mode", preset.CropMode)
 	}
-	audioTracks := make([]string, len(audio))
-	encoders := make([]string, len(audio))
-	bitrates := make([]string, len(audio))
-	mixdowns := make([]string, len(audio))
-	sampleRates := make([]string, len(audio))
-	for i, output := range audio {
-		audioTracks[i] = strconv.Itoa(output.InputTrack)
-		encoders[i] = output.Encoder
-		bitrates[i] = strconv.Itoa(output.Bitrate)
-		mixdowns[i] = output.Mixdown
-		sampleRates[i] = output.SampleRate
+	if len(audio) == 0 {
+		args = append(args, "--audio", "none")
+	} else {
+		audioTracks := make([]string, len(audio))
+		encoders := make([]string, len(audio))
+		bitrates := make([]string, len(audio))
+		mixdowns := make([]string, len(audio))
+		sampleRates := make([]string, len(audio))
+		for i, output := range audio {
+			audioTracks[i] = strconv.Itoa(output.InputTrack)
+			encoders[i] = output.Encoder
+			bitrates[i] = strconv.Itoa(output.Bitrate)
+			mixdowns[i] = output.Mixdown
+			sampleRates[i] = output.SampleRate
+		}
+		args = append(args,
+			"--audio", strings.Join(audioTracks, ","),
+			"--aencoder", strings.Join(encoders, ","),
+			"--ab", strings.Join(bitrates, ","),
+			"--mixdown", strings.Join(mixdowns, ","),
+			"--arate", strings.Join(sampleRates, ","),
+		)
 	}
-	args = append(args,
-		"--audio", strings.Join(audioTracks, ","),
-		"--aencoder", strings.Join(encoders, ","),
-		"--ab", strings.Join(bitrates, ","),
-		"--mixdown", strings.Join(mixdowns, ","),
-		"--arate", strings.Join(sampleRates, ","),
-	)
 
 	subtitles := "none"
 	if len(job.Subtitles) > 0 {

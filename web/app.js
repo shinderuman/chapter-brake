@@ -1,5 +1,6 @@
 import {
   apiErrorMessage,
+  audioSummary,
   canDeleteJob,
   chapterOutputDurations,
   fileSize,
@@ -544,19 +545,18 @@ async function updateChapters(form, approximate, next = false) {
 }
 
 function renderAudio() {
-  const selected = new Set(normalizeArray(state.draft.selected_audio));
+  const selected = new Map(normalizeArray(state.draft.audio_selections).map(selection => [selection.track, selection.quality]));
   main.innerHTML = `
-    ${pageHeader("STEP 05", "音声トラック", "選択した各入力音声から、高品質版と標準品質版の2音声を作成します。")}
+    ${pageHeader("STEP 05", "音声トラック", "各入力Trackの出力品質を選択してください。音声なしにもできます。")}
     <form id="audio-form">
       <div class="check-list">
-        ${state.draft.audio_tracks.map(track => `
-          <label class="check-row">
-            <input type="checkbox" name="track" value="${track.number}" ${selected.has(track.number) ? "checked" : ""}>
-            <span><strong>Track ${track.number} · ${escapeHTML(track.language || "言語不明")}</strong><small>${escapeHTML([track.name, track.codec, track.channels ? `${track.channels}ch` : "", track.sample_rate ? `${track.sample_rate}Hz` : ""].filter(Boolean).join(" · "))}</small></span>
-          </label>
-        `).join("")}
+        ${state.draft.audio_tracks.map(track => {
+          const detail = escapeHTML([track.name, track.codec, track.channels ? `${track.channels}ch` : "", track.sample_rate ? `${track.sample_rate}Hz` : ""].filter(Boolean).join(" · "));
+          const quality = selected.get(track.number) || "";
+          return `<label class="check-row audio-quality-row"><span><strong>Track ${track.number} · ${escapeHTML(track.language || "言語不明")}</strong><small>${detail}</small></span><select name="track" data-track="${track.number}" aria-label="Track ${track.number}の音質"><option value="high" ${quality === "high" ? "selected" : ""}>高音質</option><option value="standard" ${quality === "standard" ? "selected" : ""}>低音質</option><option value="" ${quality === "" ? "selected" : ""}>未選択</option></select></label>`;
+        }).join("")}
       </div>
-      <div class="notice">出力音声: 選択した各トラックにつき高品質 + 標準品質。数値ビットレートの指定は不要です。</div>
+      <div class="notice">先頭Trackは高音質、2番目以降は低音質が初期値です。すべて未選択なら音声なしで出力します。</div>
       <div class="button-row split">
         <button class="button ghost" type="button" data-action="back-chapters">チャプターへ戻る</button>
         <button class="button" type="submit">${state.draft.preset?.container === "mp4" ? "出力確認へ" : "字幕設定へ"}</button>
@@ -565,16 +565,27 @@ function renderAudio() {
   `;
 }
 
-async function submitTracks(form, kind) {
-  const tracks = [...form.querySelectorAll('input[name="track"]:checked')].map(input => Number(input.value));
+async function submitAudio(form) {
+  const selections = [...form.querySelectorAll('select[name="track"]')]
+    .filter(select => select.value !== "")
+    .map(select => ({ track: Number(select.dataset.track), quality: select.value }));
   await perform(async () => {
-    state.draft = await api(`/drafts/${state.draft.id}/${kind}`, { method: "PUT", body: { tracks } });
-    if (kind === "audio" && state.draft.preset?.container !== "mp4") {
+    state.draft = await api(`/drafts/${state.draft.id}/audio`, { method: "PUT", body: { selections } });
+    if (state.draft.preset?.container !== "mp4") {
       state.view = "subtitles";
       return;
     }
     await buildPreview();
-  }, kind === "audio" ? "音声設定を確認中…" : "字幕設定を確認中…");
+  }, "音声設定を確認中…");
+  render();
+}
+
+async function submitSubtitles(form) {
+  const tracks = [...form.querySelectorAll('input[name="track"]:checked')].map(input => Number(input.value));
+  await perform(async () => {
+    state.draft = await api(`/drafts/${state.draft.id}/subtitles`, { method: "PUT", body: { tracks } });
+    await buildPreview();
+  }, "字幕設定を確認中…");
   render();
 }
 
@@ -623,7 +634,7 @@ function renderPreview() {
       <table>
         <thead><tr><th>出力</th><th>Chapter</th><th>参考時間</th><th>入力音声</th><th>字幕</th></tr></thead>
         <tbody>${preview.jobs.map(job => `
-          <tr><td>${escapeHTML(outputName(job.output))}</td><td class="mono">${job.chapter_start}–${job.chapter_end}</td><td class="mono">${formatDuration(job.duration_seconds)}</td><td>${escapeHTML(job.audio_tracks.join(", "))}</td><td>${job.subtitles.length ? escapeHTML(job.subtitles.join(", ")) : "なし"}</td></tr>
+          <tr><td>${escapeHTML(outputName(job.output))}</td><td class="mono">${job.chapter_start}–${job.chapter_end}</td><td class="mono">${formatDuration(job.duration_seconds)}</td><td>${escapeHTML(audioSummary(job))}</td><td>${job.subtitles.length ? escapeHTML(job.subtitles.join(", ")) : "なし"}</td></tr>
         `).join("")}</tbody>
       </table>
     </div>
@@ -698,7 +709,7 @@ function renderJobDialog() {
         <div class="metric"><span>参考動画時間</span><strong>${formatDuration(job.duration_seconds)}</strong></div>
         <div class="metric"><span>プリセット</span><strong>${escapeHTML(job.preset)}</strong></div>
       </div>
-      <p>入力音声: ${escapeHTML(job.audio_tracks.join(", "))} ／ 字幕: ${job.subtitles.length ? escapeHTML(job.subtitles.join(", ")) : "なし"}</p>
+      <p>入力音声: ${escapeHTML(audioSummary(job))} ／ 字幕: ${job.subtitles.length ? escapeHTML(job.subtitles.join(", ")) : "なし"}</p>
       ${current ? currentControls(runtime) : waitingControls(job, runtime)}
       ${logPath ? `<p class="field-label">ジョブログ: ${escapeHTML(logPath)}</p><pre class="log-view">${escapeHTML(logText || "ログ更新を待っています…")}</pre>` : ""}
     </div>
@@ -880,8 +891,8 @@ document.addEventListener("submit", async event => {
   try {
     if (event.target.id === "naming-form") await submitNaming(event.target);
     if (event.target.id === "chapters-form") await updateChapters(event.target, false, true);
-    if (event.target.id === "audio-form") await submitTracks(event.target, "audio");
-    if (event.target.id === "subtitles-form") await submitTracks(event.target, "subtitles");
+    if (event.target.id === "audio-form") await submitAudio(event.target);
+    if (event.target.id === "subtitles-form") await submitSubtitles(event.target);
     if (event.target.id === "settings-form") await saveSettings(event.target);
   } catch {
     render();

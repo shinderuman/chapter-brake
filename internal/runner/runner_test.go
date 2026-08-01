@@ -239,16 +239,16 @@ func testJob(t *testing.T, container queue.Container) queue.Job {
 		preset = "1080p MP4"
 	}
 	return queue.Job{
-		ID:           "job-1",
-		CreatedAt:    time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
-		Input:        input,
-		Output:       output,
-		Preset:       preset,
-		Container:    container,
-		ChapterStart: 1,
-		ChapterEnd:   2,
-		AudioTracks:  []int{1},
-		Subtitles:    subtitles,
+		ID:              "job-1",
+		CreatedAt:       time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
+		Input:           input,
+		Output:          output,
+		Preset:          preset,
+		Container:       container,
+		ChapterStart:    1,
+		ChapterEnd:      2,
+		AudioSelections: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}},
+		Subtitles:       subtitles,
 	}
 }
 

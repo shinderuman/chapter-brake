@@ -140,12 +140,16 @@ store chapter-number ranges only.
 Audio and subtitles:
 
 ```json
+{"selections":[{"track":1,"quality":"high"},{"track":3,"quality":"standard"}]}
+```
+
+```json
 {"tracks":[1,2]}
 ```
 
-Audio selection continues to generate ChapterBrake's high-quality and standard
-versions. MP4 subtitle selection is rejected, and subtitle burn-in remains
-disabled.
+The first body is for audio. Each available track accepts `high`, `standard`,
+or omission from `selections`; an empty array means no audio. The second body is
+for subtitles. MP4 subtitle selection is rejected, and subtitle burn-in remains disabled.
 
 Queue add:
 

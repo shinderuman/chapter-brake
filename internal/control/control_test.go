@@ -334,12 +334,12 @@ func testQueue(t *testing.T) queue.Queue {
 			{
 				ID: "job-1", CreatedAt: now, Input: filepath.Join(root, "input.mkv"),
 				Output: filepath.Join(root, "one.mkv"), Preset: "Preset", Container: queue.ContainerMKV,
-				ChapterStart: 1, ChapterEnd: 2, DurationSeconds: 1200, AudioTracks: []int{1}, Subtitles: []int{},
+				ChapterStart: 1, ChapterEnd: 2, DurationSeconds: 1200, AudioSelections: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}}, Subtitles: []int{},
 			},
 			{
 				ID: "job-2", CreatedAt: now, Input: filepath.Join(root, "input.mkv"),
 				Output: filepath.Join(root, "two.mkv"), Preset: "Preset", Container: queue.ContainerMKV,
-				ChapterStart: 3, ChapterEnd: 4, DurationSeconds: 1200, AudioTracks: []int{1}, Subtitles: []int{},
+				ChapterStart: 3, ChapterEnd: 4, DurationSeconds: 1200, AudioSelections: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}}, Subtitles: []int{},
 			},
 		},
 	}

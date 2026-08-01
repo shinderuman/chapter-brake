@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,7 +60,7 @@ type Draft struct {
 	ChapterInterval  time.Duration
 	OutputDirectory  string
 	SelectedChapters []int
-	AudioTracks      []int
+	AudioSelections  []queue.AudioSelection
 	Subtitles        []int
 	AutoChapters     bool
 	TailMerged       bool
@@ -134,15 +133,16 @@ func (s *Service) AnalyzeWithProgress(ctx context.Context, input string, progres
 	if err != nil {
 		return Draft{}, err
 	}
-	audio := make([]int, 0, 2)
-	for _, track := range mediaInfo.AudioTracks {
-		if track.Number == 1 || track.Number == 2 {
-			audio = append(audio, track.Number)
+	audio := make([]queue.AudioSelection, len(mediaInfo.AudioTracks))
+	for index, track := range mediaInfo.AudioTracks {
+		quality := queue.AudioStandard
+		if index == 0 {
+			quality = queue.AudioHigh
 		}
+		audio[index] = queue.AudioSelection{Track: track.Number, Quality: quality}
 	}
-	sort.Ints(audio)
 	if len(audio) == 0 {
-		return Draft{}, fmt.Errorf("input has no supported audio tracks 1 or 2")
+		return Draft{}, fmt.Errorf("input has no audio tracks")
 	}
 	return Draft{
 		Input:            input,
@@ -151,7 +151,7 @@ func (s *Service) AnalyzeWithProgress(ctx context.Context, input string, progres
 		ChapterInterval:  chapterInterval,
 		OutputDirectory:  outputDirectory,
 		SelectedChapters: selected,
-		AudioTracks:      audio,
+		AudioSelections:  audio,
 		Subtitles:        []int{},
 		AutoChapters:     true,
 		TailMerged:       approximation.TailMerged,
@@ -214,7 +214,7 @@ func (s *Service) BuildPreview(draft Draft) (Preview, error) {
 	if err != nil {
 		return Preview{}, err
 	}
-	if _, err := handbrake.AudioPlan(draft.AudioTracks, draft.Media.AudioTracks, draft.Preset.Container); err != nil {
+	if _, err := handbrake.AudioPlan(draft.AudioSelections, draft.Media.AudioTracks, draft.Preset.Container); err != nil {
 		return Preview{}, err
 	}
 	if draft.Preset.Container == queue.ContainerMP4 && len(draft.Subtitles) != 0 {
@@ -256,7 +256,7 @@ func (s *Service) BuildPreview(draft Draft) (Preview, error) {
 			ChapterStart:    chapterRange.Start,
 			ChapterEnd:      chapterRange.End,
 			DurationSeconds: int64(duration.Round(time.Second) / time.Second),
-			AudioTracks:     append([]int{}, draft.AudioTracks...),
+			AudioSelections: append([]queue.AudioSelection{}, draft.AudioSelections...),
 			Subtitles:       append([]int{}, draft.Subtitles...),
 		}
 		if err := jobs[i].Validate(); err != nil {
