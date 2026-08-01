@@ -7,11 +7,6 @@ coverage.out
 # ChapterBrake job temporary files
 **/.chapterbrake-*
 
-# PoC generated artifacts
-/poc/artifacts/
-/poc/logs/
-/poc/tui-spike/tui-spike
-
 # Local scratch data
 /tmp/
 
