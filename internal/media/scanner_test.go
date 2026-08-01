@@ -121,6 +121,25 @@ func TestScanner(t *testing.T) {
 	}
 }
 
+func TestScannerWithProgress(t *testing.T) {
+	output := `Progress: {"Scanning":{"Progress":0.4},"State":"SCANNING"}\n` + validScan
+	executor := &scanExecutor{output: []byte(output)}
+	var progress []float64
+	scanner := Scanner{Executor: executor}
+	if _, err := scanner.ScanWithProgress(
+		context.Background(),
+		"/input/source.mkv",
+		io.Discard,
+		io.Discard,
+		func(value float64) { progress = append(progress, value) },
+	); err != nil {
+		t.Fatalf("ScanWithProgress() error = %v", err)
+	}
+	if !reflect.DeepEqual(progress, []float64{0.4}) {
+		t.Fatalf("progress = %v", progress)
+	}
+}
+
 func TestScannerCommandError(t *testing.T) {
 	commandErr := errors.New("scan failed")
 	scanner := Scanner{Executor: &scanExecutor{err: commandErr}}

@@ -160,8 +160,8 @@ func TestValidateDirectories(t *testing.T) {
 		{"directories", root, root, ""},
 		{"input file", file, root, "input path is not a directory"},
 		{"missing input", filepath.Join(root, "missing-input"), root, "stat input directory"},
-		{"output file", root, file, "output path is not a directory"},
-		{"missing output", root, filepath.Join(root, "missing-output"), "stat output directory"},
+		{"output file is checked at job start", root, file, ""},
+		{"missing output is created at job start", root, filepath.Join(root, "missing-output"), ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

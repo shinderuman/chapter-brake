@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"chapterbrake/internal/app"
 	"chapterbrake/internal/config"
+	"chapterbrake/internal/control"
 	"chapterbrake/internal/handbrake"
 	"chapterbrake/internal/instance"
 	"chapterbrake/internal/logging"
@@ -22,12 +24,11 @@ import (
 	"chapterbrake/internal/queue"
 	"chapterbrake/internal/runner"
 	"chapterbrake/internal/runstate"
-	"chapterbrake/internal/tui"
+	"chapterbrake/internal/webapi"
 )
 
-type terminal interface {
-	Run() error
-	Shutdown()
+type webBackend interface {
+	Serve(context.Context) error
 }
 
 type dependencies struct {
@@ -37,23 +38,26 @@ type dependencies struct {
 	executor      process.Executor
 	jobExecutor   process.Executor
 	inspectTools  func(context.Context, process.Executor) ([]app.ToolInfo, error)
-	newTerminal   func(*app.Service, *runner.Runner, string) (terminal, error)
+	newWebBackend func(webapi.Config) (webBackend, error)
 }
 
 type runOptions struct {
 	inputDirectory string
 }
 
-// Run initializes and runs ChapterBrake until the user exits or macOS asks it
-// to terminate.
+// Run initializes the ChapterBrake backend launched by Local Web App Server.
 func Run(args []string) error {
 	opts, err := parseOptions(args)
 	if err != nil {
 		return err
 	}
+	socket := os.Getenv("LOCAL_WEB_SOCKET")
+	if socket == "" {
+		return errors.New("LOCAL_WEB_SOCKET is required; launch ChapterBrake through Local Web App Server")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	return run(ctx, productionDependencies(), opts)
+	return runWeb(ctx, productionDependencies(), opts, socket)
 }
 
 func parseOptions(args []string) (runOptions, error) {
@@ -88,17 +92,45 @@ func productionDependencies() dependencies {
 		executor:      &process.OSExecutor{},
 		jobExecutor:   &process.OSExecutor{},
 		inspectTools:  app.InspectTools,
-		newTerminal: func(
-			service *app.Service,
-			queueRunner *runner.Runner,
-			initialDirectory string,
-		) (terminal, error) {
-			return tui.New(service, queueRunner, initialDirectory)
+		newWebBackend: func(config webapi.Config) (webBackend, error) {
+			return webapi.New(config)
 		},
 	}
 }
 
-func run(ctx context.Context, deps dependencies, opts runOptions) error {
+func runWeb(ctx context.Context, deps dependencies, opts runOptions, socket string) error {
+	return runBackend(ctx, deps, opts, func(
+		ctx context.Context,
+		service *app.Service,
+		queueRunner *runner.Runner,
+		initialDirectory string,
+		logger *slog.Logger,
+	) error {
+		controller, err := control.New(service, queueRunner)
+		if err != nil {
+			return err
+		}
+		backend, err := deps.newWebBackend(webapi.Config{
+			Socket:           socket,
+			InitialDirectory: initialDirectory,
+			Application:      service,
+			Presets:          service.Presets,
+			Controller:       controller,
+			Logger:           logger,
+		})
+		if err != nil {
+			return err
+		}
+		return backend.Serve(ctx)
+	})
+}
+
+func runBackend(
+	ctx context.Context,
+	deps dependencies,
+	opts runOptions,
+	frontend func(context.Context, *app.Service, *runner.Runner, string, *slog.Logger) error,
+) error {
 	home, err := deps.homeDirectory()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
@@ -211,28 +243,15 @@ func run(ctx context.Context, deps dependencies, opts runOptions) error {
 		Presets:         catalog,
 		OutputDirectory: settings.OutputDirectory,
 		ChapterInterval: chapterInterval,
+		InputDirectory:  settings.InputDirectory,
+		SettingsStore:   settingsStore,
 	}
 	appLogger.Info("input browser initialized",
 		"directory", initialDirectory,
 		"source", initialDirectorySource,
 	)
-	screen, err := deps.newTerminal(service, queueRunner, initialDirectory)
-	if err != nil {
+	if err := frontend(ctx, service, queueRunner, initialDirectory, appLogger); err != nil {
 		return err
-	}
-
-	finished := make(chan struct{})
-	defer close(finished)
-	go func() {
-		select {
-		case <-ctx.Done():
-			screen.Shutdown()
-		case <-finished:
-		}
-	}()
-
-	if err := screen.Run(); err != nil {
-		return fmt.Errorf("run TUI: %w", err)
 	}
 	appLogger.Info("application stopped")
 	return nil

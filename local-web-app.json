@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "chapter-brake",
+  "name": "ChapterBrake",
+  "web_root": "web",
+  "backend": {
+    "executable": "bin/chapterbrake",
+    "args": [],
+    "shutdown_timeout_seconds": 0
+  }
+}

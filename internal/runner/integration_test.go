@@ -20,7 +20,7 @@ func TestRealToolchainIntegration(t *testing.T) {
 	}
 	fixture := os.Getenv("CHAPTERBRAKE_FIXTURE")
 	if fixture == "" {
-		t.Fatal("CHAPTERBRAKE_FIXTURE must name the PoC MKV")
+		t.Fatal("CHAPTERBRAKE_FIXTURE must name an integration-test MKV")
 	}
 	fixture, err := filepath.Abs(fixture)
 	if err != nil {
@@ -55,16 +55,16 @@ func TestRealToolchainIntegration(t *testing.T) {
 				subtitles = []int{}
 			}
 			job := queue.Job{
-				ID:           "integration-" + string(container),
-				CreatedAt:    time.Now(),
-				Input:        fixture,
-				Output:       output,
-				Preset:       preset,
-				Container:    container,
-				ChapterStart: 1,
-				ChapterEnd:   2,
-				AudioTracks:  []int{1},
-				Subtitles:    subtitles,
+				ID:              "integration-" + string(container),
+				CreatedAt:       time.Now(),
+				Input:           fixture,
+				Output:          output,
+				Preset:          preset,
+				Container:       container,
+				ChapterStart:    1,
+				ChapterEnd:      2,
+				AudioSelections: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}},
+				Subtitles:       subtitles,
 			}
 			store := &queue.Store{Path: filepath.Join(root, "queue.json")}
 			if err := store.Save(queue.Queue{Version: queue.Version, Jobs: []queue.Job{job}}); err != nil {

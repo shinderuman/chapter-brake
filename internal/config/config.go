@@ -79,27 +79,6 @@ func (s Settings) ValidateDirectories() error {
 	if !info.IsDir() {
 		return fmt.Errorf("input path is not a directory: %s", s.InputDirectory)
 	}
-
-	info, err = os.Stat(s.OutputDirectory)
-	if err != nil {
-		return fmt.Errorf("stat output directory %s: %w", s.OutputDirectory, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("output path is not a directory: %s", s.OutputDirectory)
-	}
-
-	probe, err := os.CreateTemp(s.OutputDirectory, ".chapterbrake-write-test-*")
-	if err != nil {
-		return fmt.Errorf("output directory is not writable %s: %w", s.OutputDirectory, err)
-	}
-	probePath := probe.Name()
-	if err := probe.Close(); err != nil {
-		_ = os.Remove(probePath)
-		return fmt.Errorf("close output directory write test %s: %w", probePath, err)
-	}
-	if err := os.Remove(probePath); err != nil {
-		return fmt.Errorf("remove output directory write test %s: %w", probePath, err)
-	}
 	return nil
 }
 

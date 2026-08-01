@@ -19,8 +19,11 @@ func validJob() Job {
 		Container:    ContainerMKV,
 		ChapterStart: 1,
 		ChapterEnd:   4,
-		AudioTracks:  []int{1, 2},
-		Subtitles:    []int{1},
+		AudioSelections: []AudioSelection{
+			{Track: 1, Quality: AudioHigh},
+			{Track: 2, Quality: AudioStandard},
+		},
+		Subtitles: []int{1},
 	}
 }
 
@@ -36,6 +39,12 @@ func TestJobValidate(t *testing.T) {
 			j.Output = "/Volumes/Output/source_01.mp4"
 			j.Subtitles = []int{}
 		}, ""},
+		{"valid track three audio selection", func(j *Job) {
+			j.AudioSelections = []AudioSelection{{Track: 1, Quality: AudioHigh}, {Track: 3, Quality: AudioStandard}}
+		}, ""},
+		{"valid audio-less job", func(j *Job) {
+			j.AudioSelections = []AudioSelection{}
+		}, ""},
 		{"invalid id", func(j *Job) { j.ID = "../bad" }, "invalid id"},
 		{"zero created", func(j *Job) { j.CreatedAt = time.Time{} }, "created_at"},
 		{"relative input", func(j *Job) { j.Input = "source.mkv" }, "input must be absolute"},
@@ -49,10 +58,16 @@ func TestJobValidate(t *testing.T) {
 		{"chapter below one", func(j *Job) { j.ChapterStart = 0 }, "chapter range"},
 		{"chapter reversed", func(j *Job) { j.ChapterStart, j.ChapterEnd = 4, 3 }, "chapter range"},
 		{"negative duration", func(j *Job) { j.DurationSeconds = -1 }, "duration_seconds"},
-		{"nil audio", func(j *Job) { j.AudioTracks = nil }, "JSON array"},
-		{"empty audio", func(j *Job) { j.AudioTracks = []int{} }, "at least one"},
-		{"audio above two", func(j *Job) { j.AudioTracks = []int{3} }, "unsupported"},
-		{"duplicate audio", func(j *Job) { j.AudioTracks = []int{1, 1} }, "duplicate"},
+		{"nil audio", func(j *Job) { j.AudioSelections = nil }, "JSON array"},
+		{"invalid audio selection track", func(j *Job) {
+			j.AudioSelections = []AudioSelection{{Track: 0, Quality: AudioHigh}}
+		}, "invalid track"},
+		{"invalid audio selection quality", func(j *Job) {
+			j.AudioSelections = []AudioSelection{{Track: 1, Quality: "lossless"}}
+		}, "invalid quality"},
+		{"duplicate audio selection", func(j *Job) {
+			j.AudioSelections = []AudioSelection{{Track: 3, Quality: AudioHigh}, {Track: 3, Quality: AudioStandard}}
+		}, "duplicate"},
 		{"nil subtitles", func(j *Job) { j.Subtitles = nil }, "JSON array"},
 		{"bad subtitle", func(j *Job) { j.Subtitles = []int{0} }, "invalid"},
 		{"duplicate subtitle", func(j *Job) { j.Subtitles = []int{1, 1} }, "duplicate"},
@@ -168,6 +183,30 @@ func TestQueueMoveJob(t *testing.T) {
 	}
 	if _, err := q.MoveJob(second.ID, 2); err == nil {
 		t.Fatal("MoveJob(invalid delta) error = nil")
+	}
+}
+
+func TestQueueMoveJobTo(t *testing.T) {
+	first := validJob()
+	second := validJob()
+	second.ID = "second"
+	second.Output = "/Volumes/Output/source_02.mkv"
+	third := validJob()
+	third.ID = "third"
+	third.Output = "/Volumes/Output/source_03.mkv"
+	q := Queue{Version: Version, Jobs: []Job{first, second, third}}
+
+	moved, err := q.MoveJobTo(third.ID, 0)
+	if err != nil {
+		t.Fatalf("MoveJobTo() error = %v", err)
+	}
+	got := []string{moved.Jobs[0].ID, moved.Jobs[1].ID, moved.Jobs[2].ID}
+	want := []string{third.ID, first.ID, second.ID}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("MoveJobTo() order = %v, want %v", got, want)
+	}
+	if _, err := q.MoveJobTo(second.ID, 3); err == nil {
+		t.Fatal("MoveJobTo(out of range) error = nil")
 	}
 }
 
@@ -295,11 +334,17 @@ func TestStoreLoadOrCreateAndInvalidFiles(t *testing.T) {
 		if err := store.MoveJob(first.ID, 1); err == nil {
 			t.Fatal("MoveJob(active) error = nil")
 		}
+		if err := store.MoveJobTo(second.ID, 1); err != nil {
+			t.Fatalf("MoveJobTo(waiting) error = %v", err)
+		}
+		if err := store.MoveJobTo(second.ID, 0); err == nil {
+			t.Fatal("MoveJobTo(ahead of active) error = nil")
+		}
 		got, err := store.Load()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Jobs[0].ID != first.ID || got.Jobs[1].ID != third.ID {
+		if got.Jobs[0].ID != first.ID || got.Jobs[1].ID != second.ID || got.Jobs[2].ID != third.ID {
 			t.Fatalf("queue order = %#v", got.Jobs)
 		}
 	})

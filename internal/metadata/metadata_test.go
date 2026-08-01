@@ -10,16 +10,16 @@ import (
 
 func metadataJob(container queue.Container) queue.Job {
 	return queue.Job{
-		ID:           "job-1",
-		CreatedAt:    time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
-		Input:        "/input/source.mkv",
-		Output:       "/output/日本語 Title #01." + string(container),
-		Preset:       "preset",
-		Container:    container,
-		ChapterStart: 1,
-		ChapterEnd:   2,
-		AudioTracks:  []int{1},
-		Subtitles:    []int{},
+		ID:              "job-1",
+		CreatedAt:       time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
+		Input:           "/input/source.mkv",
+		Output:          "/output/日本語 Title #01." + string(container),
+		Preset:          "preset",
+		Container:       container,
+		ChapterStart:    1,
+		ChapterEnd:      2,
+		AudioSelections: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}},
+		Subtitles:       []int{},
 	}
 }
 

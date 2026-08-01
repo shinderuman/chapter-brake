@@ -149,55 +149,46 @@ func TestAudioPlan(t *testing.T) {
 	available := []media.AudioTrack{
 		{Number: 1, Codec: "AC-3", Channels: 6},
 		{Number: 2, Codec: "AAC", Channels: 2},
+		{Number: 3, Codec: "AAC", Channels: 2},
 	}
 	tests := []struct {
 		name      string
-		selected  []int
+		selected  []queue.AudioSelection
 		container queue.Container
 		available []media.AudioTrack
 		want      []AudioOutput
 		errText   string
 	}{
 		{
-			name:      "AC3 passthrough and standard",
-			selected:  []int{1},
+			name:      "AC3 high quality passthrough",
+			selected:  []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}},
 			container: queue.ContainerMKV,
 			want: []AudioOutput{
-				{1, AudioHigh, "copy:ac3", 640, "5point1", "auto"},
-				{1, AudioStandard, "ca_aac", 160, "stereo", "auto"},
+				{1, queue.AudioHigh, "copy:ac3", 640, "5point1", "auto"},
 			},
 		},
 		{
 			name:      "AAC uses safe high fallback",
-			selected:  []int{2},
+			selected:  []queue.AudioSelection{{Track: 2, Quality: queue.AudioHigh}},
 			container: queue.ContainerMP4,
 			want: []AudioOutput{
-				{2, AudioHigh, "ca_aac", 640, "stereo", "auto"},
-				{2, AudioStandard, "ca_aac", 160, "stereo", "auto"},
+				{2, queue.AudioHigh, "ca_aac", 640, "stereo", "auto"},
 			},
 		},
 		{
 			name:      "input order normalized",
-			selected:  []int{2, 1},
+			selected:  []queue.AudioSelection{{Track: 3, Quality: queue.AudioStandard}, {Track: 1, Quality: queue.AudioHigh}},
 			container: queue.ContainerMP4,
 			want: []AudioOutput{
-				{1, AudioHigh, "copy:ac3", 640, "5point1", "auto"},
-				{1, AudioStandard, "ca_aac", 160, "stereo", "auto"},
-				{2, AudioHigh, "ca_aac", 640, "stereo", "auto"},
-				{2, AudioStandard, "ca_aac", 160, "stereo", "auto"},
+				{1, queue.AudioHigh, "copy:ac3", 640, "5point1", "auto"},
+				{3, queue.AudioStandard, "ca_aac", 160, "stereo", "auto"},
 			},
 		},
-		{name: "none", selected: nil, container: queue.ContainerMKV, errText: "at least one"},
-		{name: "missing", selected: []int{2}, container: queue.ContainerMKV, available: available[:1], errText: "does not exist"},
-		{
-			name:      "unsupported track",
-			selected:  []int{3},
-			container: queue.ContainerMKV,
-			available: append(append([]media.AudioTrack(nil), available...), media.AudioTrack{Number: 3}),
-			errText:   "not supported",
-		},
-		{name: "duplicate selected", selected: []int{1, 1}, container: queue.ContainerMKV, errText: "more than once"},
-		{name: "bad container", selected: []int{1}, container: "webm", errText: "unsupported container"},
+		{name: "none", selected: []queue.AudioSelection{}, container: queue.ContainerMKV, want: []AudioOutput{}},
+		{name: "missing", selected: []queue.AudioSelection{{Track: 2, Quality: queue.AudioHigh}}, container: queue.ContainerMKV, available: available[:1], errText: "does not exist"},
+		{name: "duplicate selected", selected: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}, {Track: 1, Quality: queue.AudioStandard}}, container: queue.ContainerMKV, errText: "more than once"},
+		{name: "bad quality", selected: []queue.AudioSelection{{Track: 1, Quality: "lossless"}}, container: queue.ContainerMKV, errText: "unsupported quality"},
+		{name: "bad container", selected: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}}, container: "webm", errText: "unsupported container"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -232,8 +223,11 @@ func encodeJob() queue.Job {
 		Container:    queue.ContainerMKV,
 		ChapterStart: 2,
 		ChapterEnd:   5,
-		AudioTracks:  []int{1, 2},
-		Subtitles:    []int{1, 2},
+		AudioSelections: []queue.AudioSelection{
+			{Track: 1, Quality: queue.AudioHigh},
+			{Track: 2, Quality: queue.AudioStandard},
+		},
+		Subtitles: []int{1, 2},
 	}
 }
 
@@ -256,11 +250,11 @@ func TestEncodeArgs(t *testing.T) {
 		"--chapters", "2-5",
 		"--markers",
 		"--crop-mode", "auto",
-		"--audio", "1,1,2,2",
-		"--aencoder", "copy:ac3,ca_aac,ca_aac,ca_aac",
-		"--ab", "640,160,640,160",
-		"--mixdown", "5point1,stereo,stereo,stereo",
-		"--arate", "auto,auto,auto,auto",
+		"--audio", "1,2",
+		"--aencoder", "copy:ac3,ca_aac",
+		"--ab", "640,160",
+		"--mixdown", "5point1,stereo",
+		"--arate", "auto,auto",
 		"--subtitle", "1,2",
 		"--subtitle-burned=none",
 		"--subtitle-default=none",
@@ -272,6 +266,30 @@ func TestEncodeArgs(t *testing.T) {
 		for _, arg := range got {
 			if arg == forbidden {
 				t.Fatalf("EncodeArgs() contains forbidden %q", forbidden)
+			}
+		}
+	}
+}
+
+func TestEncodeArgsWithoutAudio(t *testing.T) {
+	job := encodeJob()
+	job.AudioSelections = []queue.AudioSelection{}
+	got, err := EncodeArgs(
+		job,
+		"/output/.chapterbrake-job-1-encode.mkv",
+		CuratedPresets()[1],
+		[]media.AudioTrack{{Number: 1, Codec: "AC3", Channels: 6}},
+	)
+	if err != nil {
+		t.Fatalf("EncodeArgs() error = %v", err)
+	}
+	if !containsPair(got, "--audio", "none") {
+		t.Fatalf("EncodeArgs() lacks explicit no-audio argument: %q", got)
+	}
+	for _, forbidden := range []string{"--aencoder", "--ab", "--mixdown", "--arate"} {
+		for _, argument := range got {
+			if argument == forbidden {
+				t.Fatalf("EncodeArgs() contains %q without audio: %q", forbidden, got)
 			}
 		}
 	}

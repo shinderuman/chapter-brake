@@ -17,21 +17,33 @@ const (
 	ContainerMP4 Container = "mp4"
 )
 
+type AudioQuality string
+
+const (
+	AudioHigh     AudioQuality = "high"
+	AudioStandard AudioQuality = "standard"
+)
+
+type AudioSelection struct {
+	Track   int          `json:"track"`
+	Quality AudioQuality `json:"quality"`
+}
+
 var jobIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type Job struct {
-	ID              string    `json:"id"`
-	CreatedAt       time.Time `json:"created_at"`
-	Input           string    `json:"input"`
-	Output          string    `json:"output"`
-	Preset          string    `json:"preset"`
-	PresetFile      string    `json:"preset_file,omitempty"`
-	Container       Container `json:"container"`
-	ChapterStart    int       `json:"chapter_start"`
-	ChapterEnd      int       `json:"chapter_end"`
-	DurationSeconds int64     `json:"duration_seconds,omitempty"`
-	AudioTracks     []int     `json:"audio_tracks"`
-	Subtitles       []int     `json:"subtitles"`
+	ID              string           `json:"id"`
+	CreatedAt       time.Time        `json:"created_at"`
+	Input           string           `json:"input"`
+	Output          string           `json:"output"`
+	Preset          string           `json:"preset"`
+	PresetFile      string           `json:"preset_file,omitempty"`
+	Container       Container        `json:"container"`
+	ChapterStart    int              `json:"chapter_start"`
+	ChapterEnd      int              `json:"chapter_end"`
+	DurationSeconds int64            `json:"duration_seconds,omitempty"`
+	AudioSelections []AudioSelection `json:"audio_selections"`
+	Subtitles       []int            `json:"subtitles"`
 }
 
 type Queue struct {
@@ -101,7 +113,10 @@ func (j Job) Validate() error {
 	if j.DurationSeconds < 0 {
 		return fmt.Errorf("duration_seconds must not be negative")
 	}
-	if err := validateTrackNumbers("audio_tracks", j.AudioTracks, true, 2); err != nil {
+	if j.AudioSelections == nil {
+		return fmt.Errorf("audio_selections must be a JSON array")
+	}
+	if err := validateAudioSelections(j.AudioSelections); err != nil {
 		return err
 	}
 	if err := validateTrackNumbers("subtitles", j.Subtitles, false, 0); err != nil {
@@ -109,6 +124,23 @@ func (j Job) Validate() error {
 	}
 	if j.Container == ContainerMP4 && len(j.Subtitles) != 0 {
 		return fmt.Errorf("MP4 jobs must not contain subtitles")
+	}
+	return nil
+}
+
+func validateAudioSelections(selections []AudioSelection) error {
+	seen := make(map[int]struct{}, len(selections))
+	for _, selection := range selections {
+		if selection.Track < 1 {
+			return fmt.Errorf("audio_selections contains invalid track %d", selection.Track)
+		}
+		if selection.Quality != AudioHigh && selection.Quality != AudioStandard {
+			return fmt.Errorf("audio_selections contains invalid quality %q", selection.Quality)
+		}
+		if _, exists := seen[selection.Track]; exists {
+			return fmt.Errorf("audio_selections contains duplicate track %d", selection.Track)
+		}
+		seen[selection.Track] = struct{}{}
 	}
 	return nil
 }
@@ -219,6 +251,37 @@ func (q Queue) MoveJob(id string, delta int) (Queue, error) {
 	}
 	jobs := append([]Job(nil), q.Jobs...)
 	jobs[index], jobs[destination] = jobs[destination], jobs[index]
+	next := Queue{Version: q.Version, Jobs: jobs}
+	if err := next.Validate(); err != nil {
+		return Queue{}, err
+	}
+	return next, nil
+}
+
+// MoveJobTo moves a job to a zero-based destination in the queue.
+func (q Queue) MoveJobTo(id string, destination int) (Queue, error) {
+	if destination < 0 || destination >= len(q.Jobs) {
+		return Queue{}, fmt.Errorf("queue destination %d is out of range", destination)
+	}
+	index := -1
+	for i, job := range q.Jobs {
+		if job.ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Queue{}, fmt.Errorf("queue job %q does not exist", id)
+	}
+	if index == destination {
+		return q, nil
+	}
+	jobs := append([]Job(nil), q.Jobs...)
+	job := jobs[index]
+	jobs = append(jobs[:index], jobs[index+1:]...)
+	jobs = append(jobs, Job{})
+	copy(jobs[destination+1:], jobs[destination:])
+	jobs[destination] = job
 	next := Queue{Version: q.Version, Jobs: jobs}
 	if err := next.Validate(); err != nil {
 		return Queue{}, err

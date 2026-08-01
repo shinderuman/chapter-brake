@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -16,7 +15,7 @@ import (
 	"chapterbrake/internal/instance"
 	"chapterbrake/internal/media"
 	"chapterbrake/internal/process"
-	"chapterbrake/internal/runner"
+	"chapterbrake/internal/webapi"
 )
 
 type fakeExecutor struct{}
@@ -25,51 +24,35 @@ func (fakeExecutor) Run(context.Context, process.Invocation, io.Writer, io.Write
 	return nil
 }
 
-type fakeTerminal struct {
-	run      func() error
-	stopped  chan struct{}
-	stopOnce sync.Once
+type fakeWebBackend struct {
+	serve func(context.Context) error
 }
 
-func (t *fakeTerminal) Run() error {
-	if t.run != nil {
-		return t.run()
+func (backend *fakeWebBackend) Serve(ctx context.Context) error {
+	if backend.serve != nil {
+		return backend.serve(ctx)
 	}
 	return nil
-}
-
-func (t *fakeTerminal) Shutdown() {
-	t.stopOnce.Do(func() {
-		if t.stopped != nil {
-			close(t.stopped)
-		}
-	})
 }
 
 func TestRunBuildsApplication(t *testing.T) {
 	deps, dataDirectory, inputDirectory, outputDirectory := testDependencies(t)
 	var gotService *app.Service
-	var gotRunner *runner.Runner
 	var gotInitialDirectory string
 	deps.absolutePath = func(string) (string, error) {
 		t.Fatal("absolute path was requested without a directory option")
 		return "", nil
 	}
-	deps.newTerminal = func(
-		service *app.Service,
-		queueRunner *runner.Runner,
-		initialDirectory string,
-	) (terminal, error) {
-		gotService = service
-		gotRunner = queueRunner
-		gotInitialDirectory = initialDirectory
-		return &fakeTerminal{}, nil
+	deps.newWebBackend = func(config webapi.Config) (webBackend, error) {
+		gotService = config.Application.(*app.Service)
+		gotInitialDirectory = config.InitialDirectory
+		return &fakeWebBackend{}, nil
 	}
 
-	if err := run(context.Background(), deps, runOptions{}); err != nil {
-		t.Fatalf("run() error = %v", err)
+	if err := runWeb(context.Background(), deps, runOptions{}, filepath.Join(t.TempDir(), "backend.sock")); err != nil {
+		t.Fatalf("runWeb() error = %v", err)
 	}
-	if gotService == nil || gotRunner == nil {
+	if gotService == nil {
 		t.Fatal("application dependencies were not assembled")
 	}
 	if gotService.OutputDirectory != outputDirectory {
@@ -80,12 +63,6 @@ func TestRunBuildsApplication(t *testing.T) {
 	}
 	if gotInitialDirectory != inputDirectory {
 		t.Fatalf("initial directory = %q", gotInitialDirectory)
-	}
-	if gotRunner.HandBrake != "/tools/HandBrakeCLI" ||
-		gotRunner.FFmpeg != "/tools/ffmpeg" ||
-		gotRunner.FFProbe != "/tools/ffprobe" ||
-		gotRunner.MKVPropEdit != "/tools/mkvpropedit" {
-		t.Fatalf("runner tool paths = %#v", gotRunner)
 	}
 	if _, err := os.Stat(filepath.Join(dataDirectory, "queue.json")); err != nil {
 		t.Fatalf("queue.json: %v", err)
@@ -124,22 +101,37 @@ func TestRunLoadsExportedMyPresets(t *testing.T) {
 		t.Fatal(err)
 	}
 	var gotService *app.Service
-	deps.newTerminal = func(
-		service *app.Service,
-		_ *runner.Runner,
-		_ string,
-	) (terminal, error) {
-		gotService = service
-		return &fakeTerminal{}, nil
+	deps.newWebBackend = func(config webapi.Config) (webBackend, error) {
+		gotService = config.Application.(*app.Service)
+		return &fakeWebBackend{}, nil
 	}
 
-	if err := run(context.Background(), deps, runOptions{}); err != nil {
-		t.Fatalf("run() error = %v", err)
+	if err := runWeb(context.Background(), deps, runOptions{}, filepath.Join(t.TempDir(), "backend.sock")); err != nil {
+		t.Fatalf("runWeb() error = %v", err)
 	}
 	presets := gotService.Presets.Curated()
 	if len(presets) != 1 || presets[0].DisplayName != "Custom GUI MKV" ||
 		presets[0].ImportFile != presetPath {
 		t.Fatalf("curated presets = %#v", presets)
+	}
+}
+
+func TestRunWebBuildsBackend(t *testing.T) {
+	deps, _, inputDirectory, _ := testDependencies(t)
+	var gotConfig webapi.Config
+	deps.newWebBackend = func(config webapi.Config) (webBackend, error) {
+		gotConfig = config
+		return &fakeWebBackend{}, nil
+	}
+	socket := filepath.Join(t.TempDir(), "chapterbrake.sock")
+	if err := runWeb(context.Background(), deps, runOptions{}, socket); err != nil {
+		t.Fatalf("runWeb() error = %v", err)
+	}
+	if gotConfig.Socket != socket || gotConfig.InitialDirectory != inputDirectory {
+		t.Fatalf("web config = %#v", gotConfig)
+	}
+	if gotConfig.Application == nil || gotConfig.Presets == nil || gotConfig.Controller == nil || gotConfig.Logger == nil {
+		t.Fatalf("web dependencies are incomplete: %#v", gotConfig)
 	}
 }
 
@@ -157,17 +149,18 @@ func TestRunUsesInputDirectoryOption(t *testing.T) {
 		t.Fatal(err)
 	}
 	var gotInitialDirectory string
-	deps.newTerminal = func(
-		_ *app.Service,
-		_ *runner.Runner,
-		initialDirectory string,
-	) (terminal, error) {
-		gotInitialDirectory = initialDirectory
-		return &fakeTerminal{}, nil
+	deps.newWebBackend = func(config webapi.Config) (webBackend, error) {
+		gotInitialDirectory = config.InitialDirectory
+		return &fakeWebBackend{}, nil
 	}
 
-	if err := run(context.Background(), deps, runOptions{inputDirectory: "."}); err != nil {
-		t.Fatalf("run() error = %v", err)
+	if err := runWeb(
+		context.Background(),
+		deps,
+		runOptions{inputDirectory: "."},
+		filepath.Join(t.TempDir(), "backend.sock"),
+	); err != nil {
+		t.Fatalf("runWeb() error = %v", err)
 	}
 	if gotPathArgument != "." {
 		t.Fatalf("absolute path argument = %q, want %q", gotPathArgument, ".")
@@ -206,11 +199,24 @@ func TestRunRejectsInvalidInputDirectoryOption(t *testing.T) {
 			deps.absolutePath = func(string) (string, error) {
 				return tt.path, nil
 			}
-			err := run(context.Background(), deps, runOptions{inputDirectory: "provided"})
+			err := runWeb(
+				context.Background(),
+				deps,
+				runOptions{inputDirectory: "provided"},
+				filepath.Join(t.TempDir(), "backend.sock"),
+			)
 			if err == nil || !strings.Contains(err.Error(), tt.errText) {
-				t.Fatalf("run() error = %v, want containing %q", err, tt.errText)
+				t.Fatalf("runWeb() error = %v, want containing %q", err, tt.errText)
 			}
 		})
+	}
+}
+
+func TestRunRequiresLocalWebSocket(t *testing.T) {
+	t.Setenv("LOCAL_WEB_SOCKET", "")
+	err := Run(nil)
+	if err == nil || !strings.Contains(err.Error(), "Local Web App Server") {
+		t.Fatalf("Run() error = %v", err)
 	}
 }
 
@@ -244,31 +250,29 @@ func TestParseOptions(t *testing.T) {
 	}
 }
 
-func TestRunShutsDownTerminalWhenContextIsCanceled(t *testing.T) {
+func TestRunShutsDownBackendWhenContextIsCanceled(t *testing.T) {
 	deps, _, _, _ := testDependencies(t)
-	screen := &fakeTerminal{stopped: make(chan struct{})}
-	screen.run = func() error {
-		<-screen.stopped
-		return nil
+	deps.newWebBackend = func(webapi.Config) (webBackend, error) {
+		return &fakeWebBackend{serve: func(ctx context.Context) error {
+			<-ctx.Done()
+			return nil
+		}}, nil
 	}
-	deps.newTerminal = func(*app.Service, *runner.Runner, string) (terminal, error) {
-		return screen, nil
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	socket := filepath.Join(t.TempDir(), "backend.sock")
 	go func() {
-		done <- run(ctx, deps, runOptions{})
+		done <- runWeb(ctx, deps, runOptions{}, socket)
 	}()
 	cancel()
 
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("run() error = %v", err)
+			t.Fatalf("runWeb() error = %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("run() did not stop after cancellation")
+		t.Fatal("runWeb() did not stop after cancellation")
 	}
 }
 
@@ -280,40 +284,50 @@ func TestRunRejectsSecondInstance(t *testing.T) {
 	}
 	defer lock.Close()
 
-	err = run(context.Background(), deps, runOptions{})
+	err = runWeb(context.Background(), deps, runOptions{}, filepath.Join(t.TempDir(), "backend.sock"))
 	if !errors.Is(err, instance.ErrAlreadyRunning) {
-		t.Fatalf("run() error = %v", err)
+		t.Fatalf("runWeb() error = %v", err)
 	}
 }
 
-func TestRunReportsStartupAndTerminalErrors(t *testing.T) {
+func TestRunReportsStartupAndBackendErrors(t *testing.T) {
 	expected := errors.New("failure")
 	deps, _, _, _ := testDependencies(t)
 	deps.homeDirectory = func() (string, error) {
 		return "", expected
 	}
-	if err := run(context.Background(), deps, runOptions{}); !errors.Is(err, expected) ||
+	if err := runWeb(
+		context.Background(),
+		deps,
+		runOptions{},
+		filepath.Join(t.TempDir(), "backend.sock"),
+	); !errors.Is(err, expected) ||
 		!strings.Contains(err.Error(), "home directory") {
 		t.Fatalf("home error = %v", err)
 	}
 
 	deps, _, _, _ = testDependencies(t)
-	deps.newTerminal = func(*app.Service, *runner.Runner, string) (terminal, error) {
-		return &fakeTerminal{run: func() error { return expected }}, nil
+	deps.newWebBackend = func(webapi.Config) (webBackend, error) {
+		return &fakeWebBackend{serve: func(context.Context) error { return expected }}, nil
 	}
-	if err := run(context.Background(), deps, runOptions{}); !errors.Is(err, expected) ||
-		!strings.Contains(err.Error(), "run TUI") {
-		t.Fatalf("terminal error = %v", err)
+	if err := runWeb(
+		context.Background(),
+		deps,
+		runOptions{},
+		filepath.Join(t.TempDir(), "backend.sock"),
+	); !errors.Is(err, expected) {
+		t.Fatalf("backend error = %v", err)
 	}
 
 	deps, _, _, _ = testDependencies(t)
 	deps.absolutePath = func(string) (string, error) {
 		return "", expected
 	}
-	if err := run(
+	if err := runWeb(
 		context.Background(),
 		deps,
 		runOptions{inputDirectory: "."},
+		filepath.Join(t.TempDir(), "backend.sock"),
 	); !errors.Is(err, expected) || !strings.Contains(err.Error(), "input directory") {
 		t.Fatalf("input directory resolution error = %v", err)
 	}

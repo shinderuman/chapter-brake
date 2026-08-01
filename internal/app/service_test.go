@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"chapterbrake/internal/config"
 	"chapterbrake/internal/handbrake"
 	"chapterbrake/internal/media"
 	"chapterbrake/internal/queue"
@@ -36,6 +37,13 @@ func (s *serviceStore) DeleteJob(id string) error {
 }
 func (s *serviceStore) MoveJob(id string, delta int) error {
 	next, err := s.q.MoveJob(id, delta)
+	if err == nil {
+		s.q = next
+	}
+	return err
+}
+func (s *serviceStore) MoveJobTo(id string, destination int) error {
+	next, err := s.q.MoveJobTo(id, destination)
 	if err == nil {
 		s.q = next
 	}
@@ -88,6 +96,8 @@ func testService(t *testing.T) (*Service, Draft, *serviceStore) {
 		Presets:         serviceCatalog{},
 		OutputDirectory: root,
 		ChapterInterval: media.DefaultEpisodeInterval,
+		InputDirectory:  root,
+		SettingsStore:   config.Store{Path: filepath.Join(root, "settings.json")},
 		Now: func() time.Time {
 			return time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
 		},
@@ -97,6 +107,30 @@ func testService(t *testing.T) (*Service, Draft, *serviceStore) {
 		t.Fatal(err)
 	}
 	return service, draft, store
+}
+
+func TestServiceSettings(t *testing.T) {
+	service, _, _ := testService(t)
+	output := filepath.Join(t.TempDir(), "not-created")
+	settings := config.Settings{
+		Version:         config.Version,
+		InputDirectory:  service.InputDirectory,
+		OutputDirectory: output,
+		ChapterInterval: "45:00",
+	}
+	if err := service.UpdateSettings(settings); err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
+	if got := service.CurrentSettings(); !reflect.DeepEqual(got, settings) {
+		t.Fatalf("CurrentSettings() = %#v, want %#v", got, settings)
+	}
+	stored, err := service.SettingsStore.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(stored, settings) {
+		t.Fatalf("stored settings = %#v, want %#v", stored, settings)
+	}
 }
 
 func TestAnalyzeInitialSelections(t *testing.T) {
@@ -110,11 +144,29 @@ func TestAnalyzeInitialSelections(t *testing.T) {
 	if !reflect.DeepEqual(draft.SelectedChapters, []int{1, 2}) {
 		t.Fatalf("selected chapters = %v", draft.SelectedChapters)
 	}
-	if !reflect.DeepEqual(draft.AudioTracks, []int{1, 2}) {
-		t.Fatalf("audio tracks = %v", draft.AudioTracks)
+	wantAudio := []queue.AudioSelection{
+		{Track: 1, Quality: queue.AudioHigh},
+		{Track: 2, Quality: queue.AudioStandard},
+		{Track: 3, Quality: queue.AudioStandard},
+	}
+	if !reflect.DeepEqual(draft.AudioSelections, wantAudio) {
+		t.Fatalf("audio selections = %v", draft.AudioSelections)
 	}
 	if draft.Subtitles == nil || len(draft.Subtitles) != 0 {
 		t.Fatalf("subtitles = %#v", draft.Subtitles)
+	}
+}
+
+func TestAnalyzeWithProgressFallback(t *testing.T) {
+	service, draft, _ := testService(t)
+	var progress []float64
+	if _, err := service.AnalyzeWithProgress(context.Background(), draft.Input, func(value float64) {
+		progress = append(progress, value)
+	}); err != nil {
+		t.Fatalf("AnalyzeWithProgress() error = %v", err)
+	}
+	if !reflect.DeepEqual(progress, []float64{0, 1}) {
+		t.Fatalf("progress = %v", progress)
 	}
 }
 
@@ -185,16 +237,16 @@ func TestInitializeNamingUsesQueueAndFiles(t *testing.T) {
 	service, draft, store := testService(t)
 	draft.Preset = handbrake.CuratedPresets()[1]
 	queued := queue.Job{
-		ID:           "queued",
-		CreatedAt:    time.Now(),
-		Input:        draft.Input,
-		Output:       filepath.Join(service.OutputDirectory, "番組", "番組_03.mkv"),
-		Preset:       "1080p MKV",
-		Container:    queue.ContainerMKV,
-		ChapterStart: 1,
-		ChapterEnd:   1,
-		AudioTracks:  []int{1},
-		Subtitles:    []int{},
+		ID:              "queued",
+		CreatedAt:       time.Now(),
+		Input:           draft.Input,
+		Output:          filepath.Join(service.OutputDirectory, "番組", "番組_03.mkv"),
+		Preset:          "1080p MKV",
+		Container:       queue.ContainerMKV,
+		ChapterStart:    1,
+		ChapterEnd:      1,
+		AudioSelections: []queue.AudioSelection{{Track: 1, Quality: queue.AudioHigh}},
+		Subtitles:       []int{},
 	}
 	store.q.Jobs = append(store.q.Jobs, queued)
 	outputDirectory := filepath.Join(service.OutputDirectory, "番組")
@@ -295,9 +347,10 @@ func TestBuildPreviewValidation(t *testing.T) {
 		t.Fatalf("BuildPreview(MP4 subtitles) error = %v", err)
 	}
 	draft.Subtitles = []int{}
-	draft.AudioTracks = nil
-	if _, err := service.BuildPreview(draft); err == nil {
-		t.Fatal("BuildPreview(no audio) error = nil")
+	draft.AudioSelections = []queue.AudioSelection{}
+	preview, err := service.BuildPreview(draft)
+	if err != nil || len(preview.Jobs) == 0 || preview.Jobs[0].AudioSelections == nil || len(preview.Jobs[0].AudioSelections) != 0 {
+		t.Fatalf("BuildPreview(no audio) = %#v, %v", preview, err)
 	}
 }
 
