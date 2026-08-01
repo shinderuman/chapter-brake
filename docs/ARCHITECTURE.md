@@ -14,7 +14,7 @@ PoCで必要なコードは`poc/`へ隔離し、次を守る。
 ## 1. 原則
 
 - 小規模なローカルアプリとして理解しやすい構成を優先する。
-- ドメインロジック、永続化、外部コマンド、TUI/Web境界を分離する。
+- ドメインロジック、永続化、外部コマンド、Web境界を分離する。
 - レイヤー数を増やすこと自体を目的にしない。
 - 実HandBrakeCLI、ffmpeg、mkvpropeditがなくても、範囲生成、命名、JSON、各コマンド引数生成、タイトル値決定、キュー進行を単体テストできるようにする。
 
@@ -35,7 +35,7 @@ internal/runstate
 internal/logging
 internal/control
 internal/webapi
-internal/tui
+web
 ```
 
 ### `cmd/chapterbrake`
@@ -47,14 +47,14 @@ internal/tui
 ### `internal/bootstrap`
 
 - OSシグナルをアプリの停止経路へ接続する。
-- 設定、キュー、ログ、外部ツール、ランナー、TUIの依存関係を組み立てる。
+- 設定、キュー、ログ、外部ツール、ランナー、Web APIの依存関係を組み立てる。
 - ドメイン判断を持たず、各パッケージの実装を起動可能な形へ配線する。
 
 ### `internal/app`
 
 - 画面フローとユースケースの調整。
 - ファイル解析、ジョブ生成、キュー追加、キュー実行を結ぶ。
-- TUI固有メッセージやHandBrakeCLIの細部を持ち込まない。
+- Web固有メッセージやHandBrakeCLIの細部を持ち込まない。
 
 ### `internal/config`
 
@@ -130,21 +130,20 @@ internal/tui
 ### `internal/webapi`
 
 - `LOCAL_WEB_SOCKET`で指定されたUnixドメインソケットへHTTP APIを公開する。
-- 入力選択からキュー操作までを型付きJSONで既存`app.Service`へ接続する。
+- 入力選択、設定更新、キュー操作を型付きJSONで既存`app.Service`へ接続する。
 - 状態、進捗、ETA、ジョブログ差分をSSEで配信する。
 - 任意コマンド、任意出力パス、HandBrakeCLI引数を受け取らない。
 - API契約は`docs/WEB_API.md`を正本とする。
 
-### `internal/tui`
+### `web`
 
-- Web移行完了までの一時的な既存フロントエンドとする。
-- 画面状態と入力処理。
-- ドメインロジックを重複実装しない。
-- 採用ライブラリ固有型を他パッケージへ漏らさない。
-- キュー一覧へ実行段階・進捗・ETAを統合し、詳細画面から削除、一時停止、
-  即時中断、再開を行う。
-- メインへ全キューを読み取り専用表示し、異常状態を赤い枠で通知する。
-- 待機ジョブを`j`/`k`で隣接入れ替えする。
+- ChapterBrake固有のHTML、CSS、ES Modulesを所有する。
+- `docs/WEB_API.md`の型付き操作だけを呼び、外部CLI引数を構築しない。
+- SSEスナップショットとログ差分を画面状態へ反映する。
+- ブラウザ再読み込みや切断をキュー実行の停止へ結び付けない。
+- 汎用Local Web App Serverの画面やCSSを共有しない。
+- SortableJSはChapterBrakeの`web/vendor/`へバージョン固定して同梱する。汎用サーバーは
+  各アプリ固有のUIライブラリと更新周期を所有しない。
 
 ### `internal/instance`
 
@@ -198,7 +197,7 @@ EncodeJob
 ## 5. 停止設計
 
 - 通常終了とOS終了シグナルは、現在ジョブ完了後に残りのキューを停止する。
-- TUIの即時中断だけが実行中コマンドのキャンセル経路を使う。
+- Web APIの即時中断だけが実行中コマンドのキャンセル経路を使う。
 - 現在実行中のHandBrakeCLI、ffmpeg、mkvpropeditのプロセス参照を安全に管理する。
 - 即時中断時は、まず調査で決定した穏当なシグナルを送り、期限後に強制終了する。
 - HandBrakeが一時停止中なら、SIGCONTで再開してから中断シグナルを送る。

@@ -7,16 +7,14 @@ Local Web App Server. The generic server removes `/apps/<id>` and forwards the
 remaining `/api/...` path to ChapterBrake over the Unix socket named by
 `LOCAL_WEB_SOCKET`.
 
-The API expresses existing ChapterBrake operations only. It does not accept
-external command names, HandBrakeCLI arguments, arbitrary output paths, or
-configuration edits.
+The API expresses ChapterBrake operations only. It does not accept external
+command names, HandBrakeCLI arguments, or per-job arbitrary output paths.
 
 ## 2. Process and lifecycle
 
-- Without `LOCAL_WEB_SOCKET`, the current TUI starts during the migration.
-- With `LOCAL_WEB_SOCKET`, the ChapterBrake Web backend starts.
+- `LOCAL_WEB_SOCKET` is required. ChapterBrake has no TUI execution mode.
 - The existing ChapterBrake advisory lock is acquired before reading or
-  changing the queue, so TUI and Web backends cannot run together.
+  changing the queue, so duplicate Web backends cannot run together.
 - The socket is created with mode `0600` and removed at shutdown.
 - `SIGTERM`, `SIGINT`, and `SIGHUP` stop accepting HTTP requests, resume a
   paused HandBrake process if necessary, finish the current job, pause before
@@ -56,6 +54,8 @@ related job log exists.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/status` | Initial directory, readiness, queue runtime state |
+| `GET` | `/api/settings` | Current persisted ChapterBrake settings |
+| `PUT` | `/api/settings` | Validate and atomically persist settings |
 | `GET` | `/api/files?directory=<absolute>` | Directories and MKV files sorted by name |
 | `GET` | `/api/presets` | GUI-exported My Presets equivalent |
 | `GET` | `/api/presets?source=standard` | HandBrake standard preset catalog |
@@ -63,6 +63,19 @@ related job log exists.
 `GET /api/files` uses the configured or command-line input directory when the
 query is omitted. It lists only directories and regular `.mkv` files and does
 not pre-scan media.
+
+Settings update:
+
+```json
+{
+  "input_directory":"/Volumes/2TB HDD/Images",
+  "output_directory":"/Volumes/2TB HDD/Movies",
+  "chapter_interval":"23:40"
+}
+```
+
+Input and output paths must be absolute. The input directory must exist. The
+output directory may be absent and is created when a queued job starts.
 
 ### Draft workflow
 
@@ -145,7 +158,7 @@ removes the in-memory draft.
 | `GET` | `/api/queue` | Persistent jobs plus live runtime state |
 | `GET` | `/api/queue/{id}` | Job detail plus live runtime state |
 | `DELETE` | `/api/queue/{id}` | Delete a waiting job |
-| `POST` | `/api/queue/{id}/move` | Move a waiting job one position |
+| `POST` | `/api/queue/{id}/move` | Move a waiting job by direction or absolute position |
 | `POST` | `/api/queue/start` | Manually start or resume a paused queue |
 | `POST` | `/api/queue/encoding/pause` | Send `SIGSTOP` to active HandBrake group |
 | `POST` | `/api/queue/encoding/resume` | Send `SIGCONT` to active HandBrake group |
@@ -161,6 +174,14 @@ Move:
 
 `direction` is `up` or `down`. The persistent queue store rejects moving or
 deleting the active job and rejects moving another job ahead of it.
+
+SortableJS sends a zero-based queue position instead:
+
+```json
+{"position":3}
+```
+
+Exactly one of `direction` and `position` is accepted.
 
 Pause after current:
 
@@ -241,5 +262,6 @@ runner.
   jobs and runner state do not.
 - Log events are capped at 256 KiB per event and continue from the next offset.
 - Only one ChapterBrake process and one encoding job are supported.
-- The API is intended only for the loopback generic server and trusted local
-  installed app. It does not implement authentication, TLS, or LAN access.
+- The API is intended for the generic server on loopback or a trusted LAN and
+  a trusted installed app. It does not implement authentication or TLS and
+  must not be internet-exposed.

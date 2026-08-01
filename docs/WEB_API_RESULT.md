@@ -1,5 +1,16 @@
 # Web Backend Stage 3 Result
 
+## 2026-08-01 Stage 5 update
+
+- TUI起動経路を削除し、`LOCAL_WEB_SOCKET`を製品バックエンドの必須契約にした。
+- `GET/PUT /api/settings`で入力先、出力先、標準区切り時間を検証・原子的保存する。
+  未作成の出力先は許可し、入力先は存在するディレクトリに限定する。
+- ドラフトへ作成時の出力先と区切り時間を保持し、設定変更で作成済みドラフトの
+  出力先が暗黙に変わらないことを単体試験した。
+- `POST /api/queue/{id}/move`へゼロ基準`position`を追加し、方向指定との排他、
+  実行中先頭固定、待機ジョブの位置指定永続化を試験した。
+- `go test ./...`、`go test -race ./...`、`go vet ./...`、`go build ./...`が成功した。
+
 Date: 2026-07-29
 
 ## Decision

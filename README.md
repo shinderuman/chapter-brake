@@ -1,64 +1,78 @@
 # ChapterBrake
 
-ChapterBrakeは、macOS上でMKVをチャプター番号の範囲ごとに分割し、
-HandBrakeCLIの永続キューとして順次処理するGo製TUIアプリケーションです。
+ChapterBrakeは、macOSのローカルWeb UIからMKVをチャプター番号範囲ごとに分割し、
+HandBrakeCLIの永続キューとして順次処理するGoアプリケーションです。
 
-各入力音声トラックから高品質版と標準品質版を作り、字幕は焼き付けずに扱います。
-完成ファイルのtitleメタデータはファイル名へ揃えるため、VLCやDLNAクライアントで
+各入力音声トラックから高品質版と標準品質版を作り、字幕は焼き付けません。
+完成ファイルのtitleメタデータをファイル名へ揃えるため、VLCやDLNAクライアントで
 連番どおり識別できます。
 
 ## 必要環境
 
 - macOS
 - Go 1.26系
+- Homebrew
+- Google ChromeまたはMicrosoft Edge
 - HandBrakeCLI 1.11系
 - FFmpeg / ffprobe 8系
 - MKVToolNix（mkvpropedit）
+- 同じ親ディレクトリに`local-web-app-server`リポジトリ
 
-Homebrewでの導入例:
-
-```sh
-brew install go handbrake ffmpeg mkvtoolnix
-```
+HandBrakeCLI、FFmpeg、ffprobe、mkvpropeditがない場合、既定の`make`が
+Homebrewで導入します。汎用Local Web App Serverは動画ツールを認識せず、
+このリポジトリだけが依存確認を所有します。
 
 HandBrake GUIからエクスポートした`My Presets.json`を
 `~/Documents/ChapterBrake/My Presets.json`へ置くと、その中のプリセットを
-既定一覧へ表示してHandBrakeCLIへ明示的に読み込ませます。GUIアプリ自体や
-GUI内部設定には依存しません。ファイルがない場合だけ、従来の
-`MP4 Presets`、`MKV Presets`、`My Old Presets`、`GCCX`相当の4件を
-互換一覧として表示します。
-「その他のプリセットから選ぶ」ではHandBrakeCLIの標準プリセットだけを表示します。
+My Presets一覧へ表示してHandBrakeCLIへ明示的に読み込ませます。GUIアプリ自体や
+GUI内部設定には依存しません。ファイルがない場合だけ従来相当の4件を表示します。
 
-## ビルドと起動
+## インストールと起動
 
-`make`するとビルド後に`~/.local/bin/chapterbrake`へインストールします。
+通常操作は次だけです。
 
 ```sh
 make
-chapterbrake
 ```
 
-引数なしでは`settings.json`の`input_directory`からファイル選択を開始します。
-既定値は`/Volumes/2TB HDD/Images`です。その一回だけ別のディレクトリから
-選びたい場合は、設定を書き換えずに`--directory`または短縮形`-d`で指定します。
-相対パスも使用でき、カレントディレクトリなら`.`を指定します。
+`make`は次を冪等に行います。
+
+1. 必須動画ツールを確認し、不足分だけ導入する。
+2. 隣の`local-web-app-server`をビルドして`~/.local/bin`へ配置する。
+3. ChapterBrakeバックエンドをビルドする。
+4. マニフェスト、Webファイル、バックエンドを登録する。
+5. 実行中の汎用サーバーを正常終了し、更新済みアプリで起動し直す。
+6. `http://127.0.0.1:8766/apps/chapter-brake/`を既定ブラウザで開く。
+
+サーバーは既定で`0.0.0.0:8766`を待ち受けます。同じ信頼済みLAN上のPCからは
+`http://<このMacのLAN IP>:8766/apps/chapter-brake/`へ接続できます。ブラウザは
+操作要求を送るだけで、解析、キュー保存、エンコード、後処理はすべてこのMac上で
+実行されます。TLSとHTTP認証はないため、インターネット公開やルーターのポート転送は
+行わないでください。ループバック限定に戻す場合は`make SERVER_LISTEN=127.0.0.1:8766`
+を使用します。
+
+実行中ジョブがある場合、サーバー更新はそのジョブの完了を待ち、残りのキューを
+一時停止してから行います。即時中断にはなりません。二回目以降の`make`も同じ
+登録先を置き換えるため、アプリやプロセスを重複作成しません。
+
+開発用ターゲット:
 
 ```sh
-chapterbrake --directory /path/to/videos
-chapterbrake -d .
+make build
+make test
+make check
+make doctor
+make run
+make open
+make stop
 ```
 
-`~/.local/bin`が`PATH`に入っていない場合は、使用しているシェルの設定へ
-次を追加してください。
+`chapterbrake`バイナリはLocal Web App Serverが
+`LOCAL_WEB_SOCKET`を付けて起動するバックエンドです。直接起動はしません。
+一時的な入力開始ディレクトリを指定する`--directory PATH` / `-d PATH`は、
+独自のインストールマニフェストでバックエンド引数を指定する場合に利用できます。
 
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-ビルドだけを行う場合は`make build`、配置先を変更する場合は
-`make BINDIR=/absolute/path/to/bin`を使用できます。
-
-初回起動時に次を作成します。
+## 保存場所
 
 ```text
 ~/Documents/ChapterBrake/
@@ -70,77 +84,65 @@ export PATH="$HOME/.local/bin:$PATH"
 ~/Library/Logs/ChapterBrake/
 ├── app-*.log
 └── job-*.log
+
+~/Library/Application Support/LocalWebAppServer/apps/chapter-brake/
+├── local-web-app.json
+├── web/
+└── bin/chapterbrake
 ```
 
 初期入力先は`/Volumes/2TB HDD/Images`、初期出力先は
-`/Volumes/2TB HDD/Movies`、初期区切り時間は`23:40`です。設定画面は
-ありません。恒久的に変更する場合はアプリ停止中に`settings.json`の
-`input_directory`、`output_directory`、`chapter_interval`を編集してください。
-区切り時間は`分:秒`形式で、ジョブ追加時のチャプター分割画面でもその回だけ
-変更できます。
-version 1・2の既存設定は既存値を維持してversion 4へ移行します。version 3で
-旧既定出力先`/Volumes/2TB HDD/mp4/`のままなら新既定値へ移行し、変更済みの
-出力先は維持します。
-不正JSON、未知のversion、不正な区切り時間、存在しない入力先、
-存在しない入力先、または存在しない・書き込めない出力先の基準ディレクトリは
-自動修復せずエラーで停止します。タイトル名の子ディレクトリはジョブ開始時に
-必要なら作成します。
+`/Volumes/2TB HDD/Movies`、初期区切り時間は`23:40`です。右上の設定ボタンから
+3項目を変更でき、`settings.json`へ原子的に保存します。入力先は存在する
+ディレクトリ、出力先は絶対パスを指定します。出力先自体は未作成でも保存できます。
+
+入力先はバックエンド起動時に存在するディレクトリである必要があります。
+出力先とタイトル名の子ディレクトリはジョブ開始時に必要なら作成します。
+実行中に出力先を削除した場合や、作成・書き込みに失敗した場合は、そのジョブを
+失敗として先頭に保持します。
 
 ## 操作の流れ
 
-1. 「新しいジョブを追加」を選ぶ。
-2. ディレクトリを移動し、通常のMKVファイルを一つ選ぶ。
-3. 既定プリセット、または「その他」からHandBrake標準プリセットを選ぶ。
+1. 起動直後の入力画面、または「新しいジョブ」を押す。
+2. サーバー側のディレクトリを移動し、MKVを一つ選ぶ。
+3. My PresetsまたはHandBrake標準プリセットを選ぶ。
 4. 出力ベース名と開始番号を確認する。
-5. 区切り時間と末尾短チャプターの除外を確認し、出力開始チャプターを選ぶ。
-6. 入力音声トラック1・2から一つ以上を選ぶ。
-7. MKVの場合だけ、格納するソフト字幕を選ぶ。
-8. 全出力名、チャプター範囲、音声、字幕、titleをプレビューする。
-9. 既存出力がある場合は、一覧を確認して上書きを承認する。
-10. キューへ追加すると、一時停止中でなければ順次処理を開始する。
+5. 区切り時間、末尾除外、出力開始チャプターを選ぶ。
+6. 入力音声を選ぶ。
+7. MKVの場合だけソフト字幕を選ぶ。
+8. 出力名、チャプター範囲、音声、字幕をプレビューする。
+9. 既存出力があれば上書きを明示承認する。
+10. キューへ追加する。
 
-主なキー:
+追加後は同じ入力ディレクトリへ戻るため、エンコードを進めながら続けて登録できます。
+右ペインで進捗、段階、参考動画時間、全体ETAを確認できます。ジョブを押すと
+詳細モーダルを表示します。
+実行中ジョブはHandBrake段階で一時停止・再開でき、現在ジョブ後停止と
+即時中断も選べます。待機ジョブは右ペインから確認付きで削除でき、ドラッグ＆ドロップ
+で順序を変更できます。
 
-- `↑` / `↓`: 項目移動
-- `→` / `Enter`: 一覧の決定
-- `←` / `→` / `Space`: チェック切り替え
-- チェック項目上の`Enter`: チェックを変えず次へ
-- 出力名・開始番号入力中の`Enter`: 入力を確定して次へ
-- チャプター画面の区切り時間入力中の`Enter`: 入力値で再計算して次へ
-- `←` / `Backspace`: 多くの設定画面で前の画面へ戻る
-- キュー追加中の`Esc`: メインメニューへ戻る
-- 入力欄では`←` / `→`がカーソル移動、`Backspace`が文字削除
-- ファイル選択では`../`の決定が親ディレクトリ移動、`Backspace` / `Esc`がメインへ戻る
-- キュー一覧の`Enter`: ジョブ詳細を表示
-- キュー一覧の`j` / `k`: 待機ジョブを一段下／上へ並び替え
-- 実行中ジョブ詳細: エンコード一時停止・再開、現在ジョブ後の一時停止、
-  または即時中断して一時停止
+ドラッグ＆ドロップにはChapterBrakeへ同梱したSortableJS 1.15.7を使用します。
+汎用サーバーは各WebアプリのUIライブラリを管理せず、アプリごとにバージョンを
+固定します。ライセンスは`web/vendor/SORTABLE_LICENSE.txt`に収録しています。
 
-実行中も同じアプリでキューへ追加できます。キュー一覧には進捗・段階・ETAを表示し、
-各ジョブの参考動画時間と全体ETAも表示します。メイン画面にも全キューを
-読み取り専用で表示します。待機ジョブの詳細から削除でき、`j` / `k`を繰り返すと
-同じジョブを連続して下／上へ移動できます。実行中ジョブは削除・移動できません。
-二重起動と複数同時エンコードは行いません。
+ブラウザの再読み込みや終了はエンコードを停止しません。再度URLを開くと、
+永続キューと現在状態を復元します。
 
 ## チャプター、音声、字幕
 
 切り出し範囲にはHandBrakeCLIの`--chapters N-M`だけを使います。秒、フレーム、
 PTS指定やエンコード後の境界補正は行いません。HandBrake GUIでも発生する
-素材依存の境界重複・欠落はHandBrakeの仕様として扱います。
-最終チャプターが2秒以下なら、チャプター画面の「末尾の短いチャプターを除外」を
-初期オンにします。ユーザーが解除すれば通常どおり最終チャプターも出力します。
+素材依存の境界挙動はHandBrakeの仕様として扱います。
 
-チャプター画面には動画全体、各チャプターの開始・単体時間、各チェック位置から
-生成される出力合計時間を表示します。自動近似で短い末尾単体出力が生じる場合は、
-直前の最終区間へ結合して画面先頭に範囲と合計時間を表示します。
+チャプター画面には動画全体、各チャプターの開始、単体時間、選択位置からの
+出力合計時間を表示します。自動近似で短い末尾単体出力が生じる場合は直前区間へ
+結合し、2秒以下の最終チャプターは初期状態で除外します。どちらも画面で確認・変更
+できます。
 
 音声ビットレートの数値入力はありません。選択した各入力トラックから次を作ります。
 
-- 高品質: PoC済みのAC-3はパススルー。それ以外は高品質AACへフォールバック。
+- 高品質: AC-3パススルー、非対応時は高品質AAC。
 - 標準品質: AAC stereo。
-
-初期版で選べる入力音声はトラック1・2です。トラック3以降は表示しても
-エンコード対象にはしません。
 
 MKVでは選択字幕をソフト字幕として格納できます。MP4は字幕なしです。
 どちらもHandBrakeの自動字幕選択と焼き付けを明示的に無効化します。
@@ -148,59 +150,39 @@ MKVでは選択字幕をソフト字幕として格納できます。MP4は字�
 ## キュー、上書き、中断
 
 `queue.json`の配列順に一件ずつ実行します。先頭ジョブは、エンコード、title設定、
-ffprobe検証、最終rename、queue保存が成功するまで残ります。
-キュー画面からメインへ戻っても処理は継続し、その間に同じアプリから追加した
-ジョブも後続として処理します。
+ffprobe検証、最終rename、queue保存が成功するまで残ります。失敗時は後続へ進みません。
 
-キュー追加時に承認した既存出力は、ジョブ開始時に確認なしで削除します。
-完成ファイルとHandBrakeCLIのジョブ固有一時ファイルは、
-`<出力先>/<出力ベース名>/`へ書きます。同名ディレクトリは再利用します。
+承認済み既存出力はジョブ開始時に再確認せず置き換えます。HandBrakeCLIは
+`<出力先>/<ベース名>/`のジョブ固有一時ファイルへ書き、検証後だけ最終名へ
+renameします。
 
-「即時中断して一時停止」では、外部プロセスグループへSIGINTを送り、終了しなければ
-期限後にSIGKILLします。プロセスの終了を待ってから部分出力を削除し、キュー先頭を
-残して後続へ進みません。通常終了は現在ジョブを完了してから残りを一時停止します。
-次回起動後は残った先頭ジョブから再開します。中断した同一ジョブは最初から処理します。
+「即時中断して一時停止」は外部プロセスの終了を待って部分出力を削除し、
+キュー先頭を残して後続を止めます。次の開始では同じジョブを最初から実行します。
+汎用サーバーやバックエンドの通常終了は現在ジョブを完了し、残りを一時停止して
+から終了します。
 
-実行中詳細の「エンコードを一時停止」はHandBrakeCLIのプロセスグループを
-`SIGSTOP`で止め、「再開」で`SIGCONT`を送ります。同じアプリを開いている間だけ
-同じ処理を再開でき、アプリ終了をまたぐレジュームではありません。
+## title後処理
 
-## title後処理と表示確認
+- MKV: `mkvpropedit`で一時MKVのsegment titleだけを直接変更する。
+- MP4: `ffmpeg -c copy`で再エンコードせず別の一時MP4へtitleを設定する。
+- `ffprobe`でtitle、ストリーム、チャプター、時刻構造を検証後だけ公開する。
 
-- MKV: `mkvpropedit`で一時MKVのsegment titleだけを直接変更します。
-- MP4: `ffmpeg -c copy`で映像・音声を再エンコードせず、別の一時MP4へtitleを設定します。
-- `ffprobe`でtitle、ストリーム、チャプター、時刻構造を確認した後だけ最終名へrenameします。
-
-title値は常に最終ファイル名から拡張子を除いた文字列です。Twonkyへ配置する前の
-確認は、完成MKV/MP4をVLCで直接開き、表示名がファイル名のstemと一致することを
-確認すれば十分です。
+title値は最終ファイル名から拡張子を除いた文字列です。Twonkyへ置く前の確認は、
+完成ファイルをVLCで直接開けば十分です。
 
 ## ログ
 
-`~/Library/Logs/ChapterBrake/`へ次を保存します。
-
-- 日別アプリログ
-- ジョブ要約ログ
-- HandBrakeCLI、ffmpeg、ffprobe、mkvpropeditごとのstdout/stderr生ログ
-
-アプリログには実際に使用する各ツールの絶対パスとバージョンを記録します。
-ジョブ失敗・中断時のTUIエラーには段階とジョブログのパスが含まれます。
-
-ログの自動削除・圧縮・ローテーションは行いません。
+`~/Library/Logs/ChapterBrake/`へ日別アプリログ、ジョブログ、HandBrakeCLI、
+ffmpeg、ffprobe、mkvpropeditのstdout/stderr生ログを保存します。Web UIのログ表示は
+この正本ログの差分表示です。自動削除、圧縮、ローテーションは行いません。
 
 ## 開発時の検証
 
-通常検証:
-
 ```sh
-gofmt -w .
-go test ./...
-go test -race ./...
-go vet ./...
-go build ./...
+make check
 ```
 
-PoCの短いMKVと実ツールを使うランナー統合試験:
+実ツール統合試験:
 
 ```sh
 CHAPTERBRAKE_INTEGRATION=1 \
@@ -208,18 +190,7 @@ CHAPTERBRAKE_FIXTURE=/absolute/path/to/source-four-chapters.mkv \
 go test ./internal/runner -run TestRealToolchainIntegration -v -count=1
 ```
 
-GUIエクスポートと実HandBrakeCLIで一時停止・再開を確認する試験:
-
-```sh
-CHAPTERBRAKE_INTEGRATION=1 \
-CHAPTERBRAKE_FIXTURE="$PWD/poc/artifacts/source-long-chapters.mkv" \
-CHAPTERBRAKE_PRESET_FILE="$HOME/Documents/ChapterBrake/My Presets.json" \
-go test ./internal/process -run TestRealHandBrakePauseResume -v -count=1
-```
-
-PoC固有のスクリプトとfixtureは`poc/`の独立Goモジュールへ隔離され、製品の
-ビルド・通常テスト・実行時依存には含まれません。成立根拠は
-`docs/POC_RESULT.md`と`docs/LOCAL_INVESTIGATION.md`にあります。
+詳細は`docs/WEB_API.md`、`docs/WEB_UI.md`、`docs/ACCEPTANCE_TESTS.md`を参照してください。
 
 ## ライセンス
 

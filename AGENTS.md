@@ -3,7 +3,7 @@
 ## プロジェクト
 
 ChapterBrakeは、macOS上でHandBrakeCLIを対話的に設定し、永続キューを順次実行する
-Go製TUIアプリケーションである。
+GoバックエンドとHTML/CSS/JavaScriptによるローカルWebアプリケーションである。
 
 ## 仕様と記録
 
@@ -11,7 +11,7 @@ Go製TUIアプリケーションである。
 
 1. `docs/REQUIREMENTS.md`
 2. `docs/DATA_FORMATS.md`
-3. `docs/TUI_FLOW.md`
+3. `docs/WEB_FLOW.md`
 4. `docs/ARCHITECTURE.md`
 5. `docs/ACCEPTANCE_TESTS.md`
 
@@ -21,6 +21,7 @@ Go製TUIアプリケーションである。
 - `docs/HANDBRAKE_INTEGRATION.md`: 外部ツールとの統合方式
 - `docs/WEB_API.md`: ChapterBrake WebバックエンドのHTTP/SSE契約
 - `docs/WEB_API_RESULT.md`: Webバックエンド実装と検証結果
+- `docs/WEB_UI.md`、`docs/WEB_UI_RESULT.md`: Web画面仕様と実ブラウザ検証結果
 - `docs/POC_RESULT.md`、`docs/LOCAL_INVESTIGATION.md`: 実機検証の根拠
 - `docs/ACCEPTANCE_RESULT.md`: 完成アプリの検証結果
 - `PLANS.md`: 開発履歴と複数段階作業の進捗
@@ -34,7 +35,7 @@ Go製TUIアプリケーションである。
 - リポジトリルートに`AGENTS.local.md`がある場合は、Git管理外のローカル指示として
   先に読む。
 - 実行可能な調査、テスト、ビルドはCodex自身が行い、利用者へ代行させない。
-- HandBrakeCLI、ffprobe/ffmpeg、mkvpropedit、macOS、tviewの挙動を記憶だけで
+- HandBrakeCLI、ffprobe/ffmpeg、mkvpropedit、macOS、Chrome/Edgeの挙動を記憶だけで
   決めず、変更に関係する範囲をローカル環境で確認する。
 - 要求されていない検索、ソート、設定画面、キュー編集などを追加しない。
 - 変更範囲を小さく保ち、無関係なリファクタリングを混ぜない。
@@ -53,7 +54,7 @@ Go製TUIアプリケーションである。
 - HandBrakeCLIのチャプター、プリセット、音声、字幕引数
 - HandBrakeCLI、ffmpeg、mkvpropedit、ffprobeの実行・中断方式
 - MKV/MP4のタイトル設定、構造検証、一時ファイル公開手順
-- 外部ツールやTUIライブラリの更新
+- 外部ツールやWebブラウザ統合の更新
 
 再検証結果と新しい制約は、該当する仕様、`docs/DECISIONS.md`、調査・受け入れ結果へ
 反映する。
