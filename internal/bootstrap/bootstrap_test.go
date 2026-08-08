@@ -1,12 +1,15 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -316,6 +319,181 @@ func TestRunRejectsSecondInstance(t *testing.T) {
 	err = runWeb(context.Background(), deps, runOptions{}, filepath.Join(t.TempDir(), "backend.sock"))
 	if !errors.Is(err, instance.ErrAlreadyRunning) {
 		t.Fatalf("runWeb() error = %v", err)
+	}
+}
+
+func TestRunStopsLockWaitWhenHostLifetimeEnds(t *testing.T) {
+	deps, dataDirectory, _, _ := testDependencies(t)
+	hostExpired := make(chan struct{})
+	deps.hostExpired = hostExpired
+	inspectCalled := false
+	deps.inspectTools = func(context.Context, process.Executor) ([]app.ToolInfo, error) {
+		inspectCalled = true
+		return nil, nil
+	}
+	lock, err := instance.Acquire(filepath.Join(dataDirectory, "chapterbrake.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runWeb(context.Background(), deps, runOptions{}, filepath.Join(t.TempDir(), "backend.sock"))
+	}()
+	time.Sleep(100 * time.Millisecond)
+	close(hostExpired)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runWeb() error = %v", err)
+		}
+		if inspectCalled {
+			t.Fatal("tool inspection ran after the host lifetime ended during lock wait")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runWeb() did not stop its instance-lock wait")
+	}
+}
+
+func TestRunStopsLockWaitWhenContextIsCanceled(t *testing.T) {
+	deps, dataDirectory, _, _ := testDependencies(t)
+	deps.hostExpired = make(chan struct{})
+	lock, err := instance.Acquire(filepath.Join(dataDirectory, "chapterbrake.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runWeb(ctx, deps, runOptions{}, filepath.Join(t.TempDir(), "backend.sock"))
+	}()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runWeb() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runWeb() did not stop its instance-lock wait after cancellation")
+	}
+}
+
+func TestRunStopsToolInspectionWhenHostLifetimeEnds(t *testing.T) {
+	deps, _, _, _ := testDependencies(t)
+	hostExpired := make(chan struct{})
+	deps.hostExpired = hostExpired
+	inspectionStarted := make(chan struct{})
+	deps.inspectTools = func(ctx context.Context, _ process.Executor) ([]app.ToolInfo, error) {
+		close(inspectionStarted)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	backendBuilt := false
+	deps.newWebBackend = func(webapi.Config) (webBackend, error) {
+		backendBuilt = true
+		return &fakeWebBackend{}, nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- runWeb(context.Background(), deps, runOptions{}, filepath.Join(t.TempDir(), "backend.sock"))
+	}()
+	<-inspectionStarted
+	close(hostExpired)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runWeb() error = %v", err)
+		}
+		if backendBuilt {
+			t.Fatal("web backend was built after host expiration canceled tool inspection")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runWeb() did not stop canceled tool inspection")
+	}
+}
+
+func TestRunDoesNotStartBackendAfterHostAlreadyExpired(t *testing.T) {
+	deps, _, _, _ := testDependencies(t)
+	hostExpired := make(chan struct{})
+	close(hostExpired)
+	deps.hostExpired = hostExpired
+	backendBuilt := false
+	deps.newWebBackend = func(webapi.Config) (webBackend, error) {
+		backendBuilt = true
+		return &fakeWebBackend{}, nil
+	}
+
+	if err := runWeb(context.Background(), deps, runOptions{}, filepath.Join(t.TempDir(), "backend.sock")); err != nil {
+		t.Fatalf("runWeb() error = %v", err)
+	}
+	if backendBuilt {
+		t.Fatal("web backend was built after host lifetime had already ended")
+	}
+}
+
+func TestRunProcessExitsOnSIGTERMDuringInstanceLockWait(t *testing.T) {
+	if os.Getenv("CHAPTERBRAKE_SIGTERM_HELPER") == "1" {
+		if err := Run(nil); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		return
+	}
+
+	home := t.TempDir()
+	dataDirectory, err := config.DataDirectory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := instance.Acquire(filepath.Join(dataDirectory, "chapterbrake.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+
+	command := exec.Command(os.Args[0], "-test.run=^TestRunProcessExitsOnSIGTERMDuringInstanceLockWait$")
+	command.Env = append(os.Environ(),
+		"CHAPTERBRAKE_SIGTERM_HELPER=1",
+		"HOME="+home,
+		"LOCAL_WEB_SOCKET="+filepath.Join(t.TempDir(), "backend.sock"),
+		"LOCAL_WEB_LIFETIME_FD=3",
+	)
+	command.ExtraFiles = []*os.File{reader}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- command.Wait()
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ChapterBrake process did not exit cleanly: %v\nstderr: %s", err, stderr.String())
+		}
+	case <-time.After(2 * time.Second):
+		_ = command.Process.Kill()
+		<-done
+		t.Fatalf("ChapterBrake process did not exit after SIGTERM\nstderr: %s", stderr.String())
 	}
 }
 

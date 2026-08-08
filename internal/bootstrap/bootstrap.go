@@ -107,16 +107,41 @@ func productionDependencies() dependencies {
 }
 
 func runWeb(ctx context.Context, deps dependencies, opts runOptions, socket string) error {
-	return runBackend(ctx, deps, opts, func(
+	err := runBackend(ctx, deps, opts, func(
 		ctx context.Context,
 		service *app.Service,
 		queueRunner *runner.Runner,
 		initialDirectory string,
 		logger *slog.Logger,
 	) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if channelClosed(deps.hostExpired) {
+			return context.Canceled
+		}
 		controller, err := control.New(service, queueRunner)
 		if err != nil {
 			return err
+		}
+		serveContext, cancelServe := context.WithCancel(ctx)
+		defer cancelServe()
+		var hostResult chan error
+		if deps.hostExpired != nil {
+			hostResult = make(chan error, 1)
+			go func() {
+				select {
+				case <-deps.hostExpired:
+					logger.Warn("Local Web App Server lifetime ended; stopping immediately")
+					shutdownContext, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+					err := controller.ShutdownImmediately(shutdownContext)
+					cancel()
+					cancelServe()
+					hostResult <- err
+				case <-serveContext.Done():
+					hostResult <- nil
+				}
+			}()
 		}
 		backend, err := deps.newWebBackend(webapi.Config{
 			Socket:           socket,
@@ -127,31 +152,26 @@ func runWeb(ctx context.Context, deps dependencies, opts runOptions, socket stri
 			Logger:           logger,
 		})
 		if err != nil {
+			cancelServe()
+			if hostResult != nil {
+				return errors.Join(err, <-hostResult)
+			}
 			return err
 		}
-		serveContext, cancelServe := context.WithCancel(ctx)
-		defer cancelServe()
-		if deps.hostExpired == nil {
+		if hostResult == nil {
 			return backend.Serve(serveContext)
 		}
-		hostResult := make(chan error, 1)
-		go func() {
-			select {
-			case <-deps.hostExpired:
-				logger.Warn("Local Web App Server lifetime ended; stopping immediately")
-				shutdownContext, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-				err := controller.ShutdownImmediately(shutdownContext)
-				cancel()
-				cancelServe()
-				hostResult <- err
-			case <-serveContext.Done():
-				hostResult <- nil
-			}
-		}()
+		if err := serveContext.Err(); err != nil {
+			return errors.Join(err, <-hostResult)
+		}
 		serveErr := backend.Serve(serveContext)
 		cancelServe()
 		return errors.Join(serveErr, <-hostResult)
 	})
+	if errors.Is(err, context.Canceled) && (ctx.Err() != nil || channelClosed(deps.hostExpired)) {
+		return nil
+	}
+	return err
 }
 
 func runBackend(
@@ -160,6 +180,20 @@ func runBackend(
 	opts runOptions,
 	frontend func(context.Context, *app.Service, *runner.Runner, string, *slog.Logger) error,
 ) error {
+	startupContext, cancelStartup := context.WithCancel(ctx)
+	defer cancelStartup()
+	if deps.hostExpired != nil {
+		go func() {
+			select {
+			case <-deps.hostExpired:
+				cancelStartup()
+			case <-startupContext.Done():
+			}
+		}()
+	}
+	if err := startupContext.Err(); err != nil {
+		return err
+	}
 	home, err := deps.homeDirectory()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
@@ -177,12 +211,20 @@ func runBackend(
 	if deps.hostExpired == nil {
 		appLock, err = instance.Acquire(lockPath)
 	} else {
-		appLock, err = instance.AcquireWithTimeout(lockPath, 4*time.Second)
+		lockContext, cancelLock := context.WithTimeout(startupContext, 4*time.Second)
+		appLock, err = instance.AcquireContext(lockContext, lockPath, 50*time.Millisecond)
+		cancelLock()
+		if errors.Is(err, context.DeadlineExceeded) && startupContext.Err() == nil {
+			err = instance.ErrAlreadyRunning
+		}
 	}
 	if err != nil {
 		return err
 	}
 	defer appLock.Close()
+	if err := startupContext.Err(); err != nil {
+		return err
+	}
 
 	settingsStore := config.Store{Path: filepath.Join(dataDirectory, "settings.json")}
 	settings, err := settingsStore.LoadOrCreate(config.DefaultSettings())
@@ -231,7 +273,10 @@ func runBackend(
 		"app_log", appLogPath,
 	)
 
-	tools, err := deps.inspectTools(ctx, deps.executor)
+	if err := startupContext.Err(); err != nil {
+		return err
+	}
+	tools, err := deps.inspectTools(startupContext, deps.executor)
 	if err != nil {
 		return err
 	}
@@ -285,9 +330,24 @@ func runBackend(
 		"directory", initialDirectory,
 		"source", initialDirectorySource,
 	)
+	if err := startupContext.Err(); err != nil {
+		return err
+	}
 	if err := frontend(ctx, service, queueRunner, initialDirectory, appLogger); err != nil {
 		return err
 	}
 	appLogger.Info("application stopped")
 	return nil
+}
+
+func channelClosed(channel <-chan struct{}) bool {
+	if channel == nil {
+		return false
+	}
+	select {
+	case <-channel:
+		return true
+	default:
+		return false
+	}
 }

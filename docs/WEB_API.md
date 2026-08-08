@@ -18,6 +18,9 @@ command names, HandBrakeCLI arguments, or per-job arbitrary output paths.
   triggers immediate queue abort, partial-output cleanup, and backend exit.
 - The existing ChapterBrake advisory lock is acquired before reading or
   changing the queue, so duplicate Web backends cannot run together.
+- Lifetime EOF or a termination signal received during startup cancels lock
+  waiting and tool inspection. The process exits without creating its socket
+  and must not continue startup after a prior backend releases the lock.
 - The socket is created with mode `0600` and removed at shutdown.
 - `SIGTERM`, `SIGINT`, and `SIGHUP` stop accepting HTTP requests, resume a
   paused HandBrake process if necessary, finish the current job, pause before

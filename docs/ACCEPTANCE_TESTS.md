@@ -11,6 +11,8 @@
 - Local Web App Serverを強制終了すると、ChapterBrakeは継承ライフタイムFDのEOFを
   検出して現在ジョブを即時中断し、部分出力を削除して終了する。サーバー再起動時は
   旧バックエンドと重複せず、新しいChapterBrakeが利用可能になる。
+- ChapterBrakeが単一起動lock待機中または外部ツール検査中でも、ライフタイムFDの
+  EOFと終了シグナルで待機を中止し、ソケット作成前に終了する。
 - 通常のLocal Web App Server終了ではライフタイムFDを先に閉じず、ChapterBrakeの
   現在ジョブ完了後停止を維持する。
 - `settings.json`の既定入力先が`/Volumes/2TB HDD/Images`。

@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -37,17 +38,36 @@ func Acquire(path string) (*Lock, error) {
 }
 
 func AcquireWithTimeout(path string, timeout time.Duration) (*Lock, error) {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	lock, err := AcquireContext(ctx, path, 50*time.Millisecond)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, ErrAlreadyRunning
+	}
+	return lock, err
+}
+
+func AcquireContext(ctx context.Context, path string, retryInterval time.Duration) (*Lock, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if retryInterval <= 0 {
+		retryInterval = 50 * time.Millisecond
+	}
 	for {
 		lock, err := Acquire(path)
-		if err == nil || !errors.Is(err, ErrAlreadyRunning) || time.Now().After(deadline) {
+		if err == nil || !errors.Is(err, ErrAlreadyRunning) {
 			return lock, err
 		}
-		remaining := time.Until(deadline)
-		if remaining > 50*time.Millisecond {
-			remaining = 50 * time.Millisecond
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
 		}
-		time.Sleep(remaining)
 	}
 }
 
