@@ -213,10 +213,21 @@ func (controller *Controller) SetPauseAfterCurrent(enabled bool) error {
 }
 
 func (controller *Controller) Abort(ctx context.Context) error {
+	return controller.stopImmediately(ctx, true)
+}
+
+func (controller *Controller) ShutdownImmediately(ctx context.Context) error {
+	return controller.stopImmediately(ctx, false)
+}
+
+func (controller *Controller) stopImmediately(ctx context.Context, requireRunning bool) error {
 	controller.mu.Lock()
 	if !controller.running || controller.cancel == nil {
 		controller.mu.Unlock()
-		return errors.New("queue is not running")
+		if requireRunning {
+			return errors.New("queue is not running")
+		}
+		return nil
 	}
 	cancel := controller.cancel
 	done := controller.runDone

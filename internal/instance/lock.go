@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 var ErrAlreadyRunning = errors.New("ChapterBrake is already running")
@@ -33,6 +34,21 @@ func Acquire(path string) (*Lock, error) {
 		return nil, fmt.Errorf("acquire instance lock: %w", err)
 	}
 	return &Lock{file: file}, nil
+}
+
+func AcquireWithTimeout(path string, timeout time.Duration) (*Lock, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		lock, err := Acquire(path)
+		if err == nil || !errors.Is(err, ErrAlreadyRunning) || time.Now().After(deadline) {
+			return lock, err
+		}
+		remaining := time.Until(deadline)
+		if remaining > 50*time.Millisecond {
+			remaining = 50 * time.Millisecond
+		}
+		time.Sleep(remaining)
+	}
 }
 
 func (l *Lock) Close() error {

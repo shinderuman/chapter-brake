@@ -13,13 +13,20 @@ command names, HandBrakeCLI arguments, or per-job arbitrary output paths.
 ## 2. Process and lifecycle
 
 - `LOCAL_WEB_SOCKET` is required. ChapterBrake has no TUI execution mode.
+- `LOCAL_WEB_LIFETIME_FD`, when provided by Local Web App Server, identifies an
+  inherited read descriptor. EOF means the host disappeared abnormally and
+  triggers immediate queue abort, partial-output cleanup, and backend exit.
 - The existing ChapterBrake advisory lock is acquired before reading or
   changing the queue, so duplicate Web backends cannot run together.
 - The socket is created with mode `0600` and removed at shutdown.
 - `SIGTERM`, `SIGINT`, and `SIGHUP` stop accepting HTTP requests, resume a
   paused HandBrake process if necessary, finish the current job, pause before
   the next job, and then exit.
-- Immediate abort is available only through its explicit API operation.
+- User-initiated immediate abort is available only through its explicit API
+  operation.
+- Normal host shutdown keeps the lifetime descriptor open and uses the signals
+  above. Therefore it still finishes the current job rather than taking the
+  abnormal-host immediate-abort path.
 
 ## 3. JSON rules
 

@@ -190,6 +190,43 @@ func TestControllerAbortKeepsQueuePaused(t *testing.T) {
 	})
 }
 
+func TestControllerShutdownImmediatelyStopsRunningQueueAndAcceptsIdle(t *testing.T) {
+	service := &fakeQueueService{queue: testQueue(t)}
+	started := make(chan struct{})
+	engine := &fakeEngine{alert: runstate.Idle()}
+	engine.run = func(ctx context.Context, callbacks runner.Callbacks) (runner.Result, error) {
+		callbacks.Stage(service.queue.Jobs[0].ID, "handbrake")
+		close(started)
+		<-ctx.Done()
+		return runner.Result{}, &runner.JobError{
+			JobID: service.queue.Jobs[0].ID, Stage: "handbrake", Canceled: true, Err: ctx.Err(),
+		}
+	}
+	controller, err := New(service, engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Start(); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := controller.ShutdownImmediately(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := controller.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Running || !snapshot.QueuePaused || snapshot.Failure != nil {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	if err := controller.ShutdownImmediately(ctx); err != nil {
+		t.Fatalf("idle ShutdownImmediately() error = %v", err)
+	}
+}
+
 func TestControllerFailureIsStructuredAndPausesQueue(t *testing.T) {
 	service := &fakeQueueService{queue: testQueue(t)}
 	engine := &fakeEngine{alert: runstate.Idle()}

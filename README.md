@@ -68,7 +68,8 @@ make stop
 ```
 
 `chapterbrake`バイナリはLocal Web App Serverが
-`LOCAL_WEB_SOCKET`を付けて起動するバックエンドです。直接起動はしません。
+`LOCAL_WEB_SOCKET`とホスト生存期間を表す`LOCAL_WEB_LIFETIME_FD`を付けて起動する
+バックエンドです。直接起動はしません。
 一時的な入力開始ディレクトリを指定する`--directory PATH` / `-d PATH`は、
 独自のインストールマニフェストでバックエンド引数を指定する場合に利用できます。
 

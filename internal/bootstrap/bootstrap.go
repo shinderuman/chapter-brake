@@ -35,6 +35,7 @@ type dependencies struct {
 	homeDirectory func() (string, error)
 	absolutePath  func(string) (string, error)
 	now           func() time.Time
+	hostExpired   <-chan struct{}
 	executor      process.Executor
 	jobExecutor   process.Executor
 	inspectTools  func(context.Context, process.Executor) ([]app.ToolInfo, error)
@@ -57,7 +58,14 @@ func Run(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	return runWeb(ctx, productionDependencies(), opts, socket)
+	lifetime, err := openHostLifetime(os.Getenv(hostLifetimeFDEnvironment))
+	if err != nil {
+		return err
+	}
+	defer lifetime.Close()
+	deps := productionDependencies()
+	deps.hostExpired = lifetime.Done()
+	return runWeb(ctx, deps, opts, socket)
 }
 
 func parseOptions(args []string) (runOptions, error) {
@@ -121,7 +129,28 @@ func runWeb(ctx context.Context, deps dependencies, opts runOptions, socket stri
 		if err != nil {
 			return err
 		}
-		return backend.Serve(ctx)
+		serveContext, cancelServe := context.WithCancel(ctx)
+		defer cancelServe()
+		if deps.hostExpired == nil {
+			return backend.Serve(serveContext)
+		}
+		hostResult := make(chan error, 1)
+		go func() {
+			select {
+			case <-deps.hostExpired:
+				logger.Warn("Local Web App Server lifetime ended; stopping immediately")
+				shutdownContext, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+				err := controller.ShutdownImmediately(shutdownContext)
+				cancel()
+				cancelServe()
+				hostResult <- err
+			case <-serveContext.Done():
+				hostResult <- nil
+			}
+		}()
+		serveErr := backend.Serve(serveContext)
+		cancelServe()
+		return errors.Join(serveErr, <-hostResult)
 	})
 }
 
@@ -143,7 +172,13 @@ func runBackend(
 	if err != nil {
 		return err
 	}
-	appLock, err := instance.Acquire(filepath.Join(dataDirectory, "chapterbrake.lock"))
+	lockPath := filepath.Join(dataDirectory, "chapterbrake.lock")
+	var appLock *instance.Lock
+	if deps.hostExpired == nil {
+		appLock, err = instance.Acquire(lockPath)
+	} else {
+		appLock, err = instance.AcquireWithTimeout(lockPath, 4*time.Second)
+	}
 	if err != nil {
 		return err
 	}

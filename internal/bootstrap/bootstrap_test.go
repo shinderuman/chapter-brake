@@ -276,6 +276,35 @@ func TestRunShutsDownBackendWhenContextIsCanceled(t *testing.T) {
 	}
 }
 
+func TestRunImmediatelyShutsDownWhenHostLifetimeEnds(t *testing.T) {
+	deps, _, _, _ := testDependencies(t)
+	hostExpired := make(chan struct{})
+	deps.hostExpired = hostExpired
+	backendStarted := make(chan struct{})
+	deps.newWebBackend = func(webapi.Config) (webBackend, error) {
+		return &fakeWebBackend{serve: func(ctx context.Context) error {
+			close(backendStarted)
+			<-ctx.Done()
+			return nil
+		}}, nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- runWeb(context.Background(), deps, runOptions{}, filepath.Join(t.TempDir(), "backend.sock"))
+	}()
+	<-backendStarted
+	close(hostExpired)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runWeb() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runWeb() did not stop when its host lifetime ended")
+	}
+}
+
 func TestRunRejectsSecondInstance(t *testing.T) {
 	deps, dataDirectory, _, _ := testDependencies(t)
 	lock, err := instance.Acquire(filepath.Join(dataDirectory, "chapterbrake.lock"))

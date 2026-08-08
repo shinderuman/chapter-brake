@@ -8,6 +8,11 @@
 - 初回起動で`~/Documents/ChapterBrake/`、`settings.json`、`queue.json`、
   `state.json`と`~/Library/Logs/ChapterBrake/`が作成される。
 - 二つ目のChapterBrakeは単一起動ロックで拒否され、一つ目のキューを変更しない。
+- Local Web App Serverを強制終了すると、ChapterBrakeは継承ライフタイムFDのEOFを
+  検出して現在ジョブを即時中断し、部分出力を削除して終了する。サーバー再起動時は
+  旧バックエンドと重複せず、新しいChapterBrakeが利用可能になる。
+- 通常のLocal Web App Server終了ではライフタイムFDを先に閉じず、ChapterBrakeの
+  現在ジョブ完了後停止を維持する。
 - `settings.json`の既定入力先が`/Volumes/2TB HDD/Images`。
 - `settings.json`の既定出力先が`/Volumes/2TB HDD/Movies`。
 - version 1設定は既存出力先を維持し、既定入力先と区切り時間を追加して
