@@ -16,6 +16,8 @@ test("analysis busy state reports determinate progress", () => {
   assert.match(appSource, /updateBusyProgress\(payload\.progress\)/);
   assert.match(appSource, /const draftRequest = api\("\/drafts"[\s\S]*?monitorAnalysisProgress/);
   assert.match(appSource, /requestController\?\.abort\(\)/);
+  assert.match(appSource, /const analysisID = createAnalysisID\(\)/);
+  assert.doesNotMatch(appSource, /randomUUID/);
 });
 
 test("completed workflow steps are direct back-navigation controls", () => {

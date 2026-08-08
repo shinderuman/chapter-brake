@@ -25,6 +25,15 @@ export function progressPercent(value) {
   return Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100);
 }
 
+export function createAnalysisID(cryptoSource = globalThis.crypto) {
+  if (!cryptoSource?.getRandomValues) {
+    throw new Error("このブラウザでは解析IDを生成できません");
+  }
+  const bytes = new Uint8Array(16);
+  cryptoSource.getRandomValues(bytes);
+  return [...bytes].map(value => value.toString(16).padStart(2, "0")).join("");
+}
+
 export function audioSummary(job) {
   const selections = normalizeArray(job?.audio_selections);
   if (selections.length === 0) return "なし";

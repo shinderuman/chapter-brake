@@ -3,6 +3,7 @@ import {
   audioSummary,
   canDeleteJob,
   chapterOutputDurations,
+  createAnalysisID,
   fileSize,
   formatDuration,
   normalizeArray,
@@ -365,7 +366,7 @@ function renderFiles() {
 
 async function analyzeFile(path) {
   await perform(async () => {
-    const analysisID = crypto.randomUUID();
+    const analysisID = createAnalysisID();
     const draftRequest = api("/drafts", { method: "POST", body: { input: path, analysis_id: analysisID } });
     const stopProgress = monitorAnalysisProgress(analysisID);
     try {

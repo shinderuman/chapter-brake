@@ -6,6 +6,7 @@ import {
   audioSummary,
   canDeleteJob,
   chapterOutputDurations,
+  createAnalysisID,
   fileSize,
   formatDuration,
   normalizeArray,
@@ -26,6 +27,17 @@ test("duration and file-size formatting", () => {
   assert.equal(progressPercent(-1), 0);
   assert.equal(progressPercent(0.7459), 75);
   assert.equal(progressPercent(2), 100);
+});
+
+test("analysis ID uses random values available on LAN HTTP origins", () => {
+  const cryptoSource = {
+    getRandomValues(bytes) {
+      bytes.forEach((_, index) => { bytes[index] = index; });
+      return bytes;
+    },
+  };
+  assert.equal(createAnalysisID(cryptoSource), "000102030405060708090a0b0c0d0e0f");
+  assert.throws(() => createAnalysisID(null), /解析IDを生成できません/);
 });
 
 test("queue position and settings request", () => {
